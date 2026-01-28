@@ -1,0 +1,21 @@
+.vscode/**
+.github/**
+.agent/**
+test/**
+CONTRIBUTING.md
+CONTRIBUTING-EN.md
+CONTRIBUTING.md.original
+builds/**
+*.vsix
+media/dashboard-overview.png
+ps1-scripts/**
+scripts/**
+docs/**
+examples/**
+resources/**
+*.log
+.DS_Store
+node_modules/**
+!node_modules/ws/**
+!node_modules/@vscode/test-electron/**
+# Note: vsce handles node_modules automatically if you follow best practices

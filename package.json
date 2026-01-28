@@ -1,0 +1,110 @@
+{
+    "name": "Auto-Agent-AntiGravity",
+    "displayName": "Auto-Agent-AntiGravity",
+    "description": "释放全自动 AI Agent。自动接受文件修改、终端命令及恢复提示，实现零干预开发。",
+    "version": "1.0.26",
+    "publisher": "Huo-zai-feng-lang-li",
+    "icon": "media/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Huo-zai-feng-lang-li/Auto-Agent-AntiGravity"
+    },
+    "author": {
+        "name": "Huo-zai-feng-lang-li",
+        "url": "https://github.com/Huo-zai-feng-lang-li"
+    },
+    "categories": [
+        "Machine Learning",
+        "Other"
+    ],
+    "keywords": [
+        "antigravity",
+        "ai",
+        "auto-all"
+    ],
+    "scripts": {
+        "test": "node test/integration-test.js",
+        "compile": "esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
+        "vscode:prepublish": "npm run compile",
+        "package": "npx vsce package"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "dist/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "auto-all.toggle",
+                "title": "Auto-Agent-AntiGravity: 开启/关闭 自动化"
+            },
+            {
+                "command": "auto-all.cycleState",
+                "title": "Auto-Agent-AntiGravity: 循环切换状态 (关闭 → 单标签 → 多标签)"
+            },
+            {
+                "command": "auto-all.toggleBackground",
+                "title": "Auto-Agent-AntiGravity: 切换多标签模式"
+            },
+            {
+                "command": "auto-all.openSettings",
+                "title": "Auto-Agent-AntiGravity: 打开仪表盘设置"
+            },
+            {
+                "command": "auto-all.resetCDPSettings",
+                "title": "Auto-Agent-AntiGravity: 重置 CDP 设置 (重新启用配置提示)"
+            }
+        ],
+        "configuration": {
+            "title": "Auto-Agent-AntiGravity",
+            "properties": {
+                "auto-all.bannedCommands": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "rm -rf /",
+                        "rm -rf ~",
+                        "rm -rf *",
+                        "format c:",
+                        "del /f /s /q",
+                        "rd /s /q",
+                        "rmdir /s /q",
+                        ":(){:|:&};:",
+                        "dd if=",
+                        "mkfs.",
+                        "> /dev/sda",
+                        "chmod -R 777 /",
+                        "shutdown",
+                        "reboot",
+                        "powershell -Command Clear-Disk",
+                        "Initialize-Disk",
+                        "Invoke-WebRequest",
+                        "curl",
+                        "wget",
+                        "nc -e",
+                        "bash -i",
+                        "cp /dev/zero",
+                        "mv ~ /dev/null"
+                    ],
+                    "description": "禁止全自动 AI 执行的高危命令关键字或模式。"
+                },
+                "auto-all.pollFrequency": {
+                    "type": "number",
+                    "default": 1000,
+                    "description": "监控 AI 活动的频率（毫秒）。较低的值响应更快，但可能消耗更多 CPU。"
+                }
+            }
+        }
+    },
+    "dependencies": {
+        "ws": "^8.13.0"
+    },
+    "devDependencies": {
+        "esbuild": "^0.27.1"
+    }
+}
