@@ -27,8 +27,10 @@ let isPro = false;
 let isLockedOut = false;
 let pollFrequency = 2000;
 let bannedCommands = [];
+let savedIsEnabledState = false; // 保存用户之前的状态，用于 CDP 连接成功后恢复
 
 let backgroundModeEnabled = false;
+let savedBackgroundModeState = false; // 保存用户之前的多标签模式状态
 const BACKGROUND_DONT_SHOW_KEY = "auto-all-background-dont-show";
 const BACKGROUND_MODE_KEY = "auto-all-background-mode";
 const VERSION_7_0_KEY = "auto-all-version-7.0-notification-shown";
@@ -78,18 +80,21 @@ async function activate(context) {
       100,
     );
     statusBarItem.command = "auto-all.cycleState";
-    statusBarItem.text = "$(sync~spin)";
+    statusBarItem.text = "$(zap) 关闭";
     statusBarItem.tooltip = "Auto-Agent-AntiGravity: Loading...";
     context.subscriptions.push(statusBarItem);
+    // 始终显示状态栏，让用户知道连接状态
     statusBarItem.show();
 
-    console.log("Auto-Agent-AntiGravity: Status bar items created and shown.");
+    console.log("Auto-Agent-AntiGravity: Status bar item created and shown.");
   } catch (sbError) {
     console.error("CRITICAL: Failed to create status bar items:", sbError);
   }
 
   try {
-    isEnabled = context.globalState.get(GLOBAL_STATE_KEY, false);
+    // 保存用户之前的状态，但不立即恢复（等 CDP 连接成功后再恢复）
+    savedIsEnabledState = context.globalState.get(GLOBAL_STATE_KEY, false);
+    isEnabled = false; // 先设为关闭，等 CDP 连接成功后再根据保存的状态决定
     isPro = context.globalState.get(PRO_STATE_KEY, false);
     isPro = true;
 
@@ -99,7 +104,9 @@ async function activate(context) {
       pollFrequency = 300;
     }
 
-    backgroundModeEnabled = context.globalState.get(BACKGROUND_MODE_KEY, false);
+    // 保存多标签模式状态，但不立即恢复
+    savedBackgroundModeState = context.globalState.get(BACKGROUND_MODE_KEY, false);
+    backgroundModeEnabled = false; // 先设为关闭，等 CDP 连接成功后再恢复
 
     const config = vscode.workspace.getConfiguration("auto-all");
     bannedCommands = context.globalState.get(
@@ -212,8 +219,8 @@ async function activate(context) {
           timeSavedMinutes,
           timeSavedFormatted:
             timeSavedMinutes >= 60
-              ? `${(timeSavedMinutes / 60).toFixed(1)} 小时`
-              : `${timeSavedMinutes} 分钟`,
+              ? `${(timeSavedMinutes / 60).toFixed(1)}小时`
+              : `${timeSavedMinutes}分钟`,
         };
       }),
       vscode.commands.registerCommand("auto-all.openSettings", () => {
@@ -353,6 +360,22 @@ async function checkEnvironmentAndStart() {
     // CDP 可用，标记注册表已配置（可能是用户手动配置的）
     await globalContext.globalState.update(CDP_REGISTRY_CONFIGURED_KEY, true);
     log("CDP available. Extension ready to work.");
+    
+    // 标记 CDP 已连接成功
+    hadCDPConnection = true;
+    
+    // CDP 连接成功后，恢复用户之前保存的状态
+    if (savedIsEnabledState) {
+      isEnabled = true;
+      backgroundModeEnabled = savedBackgroundModeState;
+      log(`CDP connected. Restored previous state: enabled=${isEnabled}, backgroundMode=${backgroundModeEnabled}`);
+    }
+    
+    // CDP 连接成功，显示状态栏
+    if (statusBarItem) {
+      statusBarItem.show();
+      log("Status bar shown after CDP connection.");
+    }
   } else if (relauncher) {
     // CDP 不可用，检查是否已经配置过注册表
     const registryConfigured = globalContext.globalState.get(
@@ -374,6 +397,7 @@ async function checkEnvironmentAndStart() {
         "⚡ auto-all: 请通过桌面快捷方式启动 IDE 以启用完整功能",
         8000,
       );
+      // CDP 不可用时不显示状态栏
     } else if (skipPrompt) {
       log(
         "CDP not available, but user chose to skip. Running in limited mode.",
@@ -382,6 +406,7 @@ async function checkEnvironmentAndStart() {
         "⚡ auto-all: CDP 未启用，部分功能受限",
         5000,
       );
+      // CDP 不可用时不显示状态栏
     } else {
       // 首次安装：自动配置注册表并重启
       log("First time setup: Configuring registry and restarting...");
@@ -798,7 +823,7 @@ async function showSessionSummaryNotification(context, summary) {
   ];
 
   if (summary.estimatedTimeSaved) {
-    lines.push(`\n⏱ 预计节省时间: ~${summary.estimatedTimeSaved} 分钟`);
+    lines.push(`\n⏱ 预计节省时间: ~${summary.estimatedTimeSaved}分钟`);
   }
 
   const message = lines.join("\n");
@@ -948,6 +973,13 @@ function updateStatusBar() {
     md.appendMarkdown(`[⚙️ 打开设置](command:auto-all.openSettings)`);
     return md;
   };
+
+  // 如果 CDP 未连接，强制显示关闭状态
+  if (!hadCDPConnection) {
+    statusBarItem.text = "$(zap) 关闭";
+    statusBarItem.tooltip = createTooltip("未连接", "CDP 未连接，点击重试");
+    return;
+  }
 
   if (!isEnabled) {
     statusBarItem.text = "$(zap) 关闭";

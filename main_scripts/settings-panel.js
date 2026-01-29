@@ -200,6 +200,9 @@ class SettingsPanel {
   getHtmlContent() {
     const isPro = this.isPro();
     const isPrompt = this.mode === "prompt";
+    const packageJson = require("../package.json");
+    const version = packageJson.version;
+    const bgUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'bg.jpg'));
 
     const css = `
             @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -225,8 +228,9 @@ class SettingsPanel {
 
             * { box-sizing: border-box; margin: 0; padding: 0; }
 
+            body {
                 font-family: var(--font-main);
-                background: url('https://zk9999902.dpdns.org/public/image/bg.png') no-repeat center center fixed !important;
+                background: url('${bgUri}') no-repeat center center fixed !important;
                 background-size: cover !important;
                 color: #0f172a; /* 深色文字适配浅色卡片 */
                 min-height: 100vh;
@@ -530,7 +534,7 @@ class SettingsPanel {
         <body>
             <div class="container">
                 <div class="header-section">
-                    <div class="brand-badge">✨ Antigravity Pro v1.0.23</div>
+                    <div class="brand-badge">✨ Antigravity Pro v${version}</div>
                     <h1>Command Center PRO</h1>
                     <p class="subtitle">您的智能自动化中枢。接管繁琐操作，释放创造潜能。</p>
                 </div>
