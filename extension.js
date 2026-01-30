@@ -286,7 +286,7 @@ const CDP_PORT = 9000;
 
 /**
  * 配置 Windows 注册表，让所有启动方式都带上 CDP 参数
- * 只在 Windows 平台执行
+ * 增强逻辑：尝试从快捷方式同步完整参数（包括 GPU 设置等），实现参数继承
  */
 async function configureWindowsRegistry() {
   if (process.platform !== "win32") {
@@ -298,10 +298,40 @@ async function configureWindowsRegistry() {
   const registryPaths = [
     `HKCU\\Software\\Classes\\${ideName}\\shell\\open\\command`,
     `HKCU\\Software\\Classes\\${ideName}-url\\shell\\open\\command`,
+    `HKCU\\Software\\Classes\\Applications\\${ideName}.exe\\shell\\open\\command`
   ];
 
   const { execSync } = require("child_process");
   let configured = false;
+
+  // 1. 尝试从快捷方式获取“完美参数串”（包含 GPU 参数、CDP 参数等）
+  let bestArgs = null;
+  if (relauncher) {
+      try {
+          const shortcuts = await relauncher.findIDEShortcuts();
+          // 找一个参数最长的快捷方式，通常意味着包含用户配置
+          const richShortcut = shortcuts
+              .filter(s => s.args && s.args.length > 0)
+              .sort((a, b) => b.args.length - a.args.length)[0];
+          
+          if (richShortcut) {
+            log(`Found rich shortcut arguments to sync: ${richShortcut.args}`);
+            bestArgs = richShortcut.args;
+          }
+      } catch (e) {
+          log(`Error fetching shortcut args: ${e.message}`);
+      }
+  }
+
+  // 如果没找到快捷方式参数，使用默认的 CDP 参数
+  if (!bestArgs) {
+      bestArgs = `--remote-debugging-port=${CDP_PORT}`;
+  }
+
+  // 确保参数里肯定有 CDP 端口
+  if (!bestArgs.includes("--remote-debugging-port")) {
+      bestArgs = `--remote-debugging-port=${CDP_PORT} ${bestArgs}`;
+  }
 
   for (const regPath of registryPaths) {
     try {
@@ -309,12 +339,8 @@ async function configureWindowsRegistry() {
       const result = execSync(`reg query "${regPath}" /ve`, {
         encoding: "utf8",
         timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'] // 忽略 stderr 防止抛错中断
       });
-
-      if (result.includes("--remote-debugging-port")) {
-        log(`Registry ${regPath} already has CDP flag.`);
-        continue;
-      }
 
       // 解析当前命令
       const match = result.match(/REG_SZ\s+(.+)/);
@@ -322,24 +348,36 @@ async function configureWindowsRegistry() {
 
       let currentCmd = match[1].trim();
 
-      // 在 exe 路径后插入 CDP 参数
-      const exeMatch = currentCmd.match(/^(".*?\.exe")\s*(.*)/i);
+      // 提取 EXE 路径
+      const exeMatch = currentCmd.match(/^(".*?\.exe"|[^ ]+\.exe)/i);
       if (exeMatch) {
-        const newCmd =
-          `${exeMatch[1]} --remote-debugging-port=${CDP_PORT} ${exeMatch[2]}`.trim();
+        const exePath = exeMatch[1];
+        
+        // 构造新命令：EXE + 完美参数 + "%1"
+        // 注意：注册表里的 %1 代表文件路径，必须保留
+        const newCmd = `${exePath} ${bestArgs} "%1"`.trim();
 
-        // 使用 PowerShell 修改注册表（避免转义问题）
+        if (currentCmd === newCmd) {
+            log(`Registry ${regPath} is already perfect.`);
+            continue;
+        }
+
+        // 使用 PowerShell 修改注册表（处理特殊字符最稳）
         const psCmd = `Set-ItemProperty -Path "HKCU:\\Software\\Classes\\${ideName}\\shell\\open\\command" -Name "(default)" -Value '${newCmd.replace(/'/g, "''")}'`;
-        execSync(`powershell -Command "${psCmd}"`, {
-          encoding: "utf8",
-          timeout: 10000,
-        });
-
-        log(`Updated registry: ${regPath}`);
-        configured = true;
+        // 尝试写入，如果路径不存在可能会失败（那是正常的，不是每个 IDE 都有所有注册表项）
+        try {
+            execSync(`powershell -Command "${psCmd}"`, {
+                encoding: "utf8",
+                timeout: 5000
+            });
+            log(`Updated registry: ${regPath} => ${bestArgs}`);
+            configured = true;
+        } catch (writeErr) {
+            // 忽略写入错误，可能是没有该键值
+        }
       }
     } catch (e) {
-      log(`Registry path ${regPath} not found or failed: ${e.message}`);
+      // reg query 失败通常意味着键不存在，忽略
     }
   }
 
@@ -441,6 +479,30 @@ async function checkEnvironmentAndStart() {
   if (isEnabled) {
     await startPolling();
     startStatsCollection(globalContext);
+
+    // [Self-Healing] 静默自愈机制
+    // 如果当前 CDP 是通的，说明我们有权限。
+    // 此时要“趁机”把注册表和所有快捷方式都修一遍，防止 IDE 更新导致断链。
+    if (cdpAvailable) {
+        setTimeout(async () => {
+            log("[Self-Healing] Starting silent environment repair...");
+            try {
+                // 1. 修复注册表 (覆盖双击文件打开的场景)
+                await configureWindowsRegistry();
+                
+                // 2. 修复所有快捷方式 (覆盖任务栏、桌面混用的场景)
+                if (relauncher) {
+                    const fixedCount = await relauncher.configureAllShortcuts();
+                    if (fixedCount > 0) {
+                        log(`[Self-Healing] Silently fixed ${fixedCount} shortcuts.`);
+                    }
+                }
+                log("[Self-Healing] Repair complete. Persistence ensured.");
+            } catch (e) {
+                log(`[Self-Healing] Failed: ${e.message}`);
+            }
+        }, 5000); // 延时 5 秒，避免拖慢启动速度
+    }
   }
   updateStatusBar();
 }

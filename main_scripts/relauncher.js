@@ -605,6 +605,10 @@ exit 1
             };
         }
 
+        // 修改策略：不仅仅是找到一个，而是修复所有能找到的快捷方式
+        // 但为了重启，我们还是需要选一个“主”快捷方式
+        await this.configureAllShortcuts(shortcuts);
+
         const primaryShortcut = shortcuts.find(s =>
             s.type === 'startmenu' || s.type === 'wrapper' || s.type === 'user'
         ) || shortcuts[0];
@@ -673,6 +677,31 @@ exit 1
 
     async showLaunchPrompt() {
         return await this.showRelaunchPrompt();
+    }
+
+    async configureAllShortcuts(shortcuts = null) {
+        if (!shortcuts) {
+            shortcuts = await this.findIDEShortcuts();
+        }
+        
+        let modifiedCount = 0;
+        this.log(`Configuring all ${shortcuts.length} shortcuts...`);
+        
+        for (const shortcut of shortcuts) {
+            try {
+                // 跳过没有任何路径的无效对象
+                if (!shortcut.path) continue;
+                
+                const result = await this.ensureShortcutHasFlag(shortcut);
+                if (result.success && result.modified) {
+                    this.log(`Fixed shortcut: ${shortcut.path}`);
+                    modifiedCount++;
+                }
+            } catch (e) {
+                this.log(`Failed to fix shortcut ${shortcut.path}: ${e.message}`);
+            }
+        }
+        return modifiedCount;
     }
 
     getLogFilePath() {

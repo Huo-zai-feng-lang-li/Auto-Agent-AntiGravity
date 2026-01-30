@@ -2,7 +2,7 @@
     "name": "Auto-Agent-AntiGravity",
     "displayName": "Auto-Agent-AntiGravity",
     "description": "释放全自动 AI Agent。自动接受文件修改、终端命令及恢复提示，实现零干预开发。",
-    "version": "1.0.27",
+    "version": "1.0.28",
     "publisher": "Huo-zai-feng-lang-li",
     "icon": "media/icon.png",
     "repository": {
