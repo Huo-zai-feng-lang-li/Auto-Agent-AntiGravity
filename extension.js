@@ -415,7 +415,7 @@ async function checkEnvironmentAndStart() {
       log("Status bar shown after CDP connection.");
     }
   } else if (relauncher) {
-    // CDP 不可用，检查是否已经配置过注册表
+    // CDP 不可用
     const registryConfigured = globalContext.globalState.get(
       CDP_REGISTRY_CONFIGURED_KEY,
       false,
@@ -426,16 +426,46 @@ async function checkEnvironmentAndStart() {
     );
 
     if (registryConfigured) {
-      // 注册表已配置但 CDP 仍不可用，可能是用户没有通过正确方式启动
-      // 或者是系统问题，不再打扰用户
-      log(
-        "Registry was configured but CDP still unavailable. User may have launched differently.",
-      );
-      vscode.window.setStatusBarMessage(
-        "⚡ auto-all: 请通过桌面快捷方式启动 IDE 以启用完整功能",
-        8000,
-      );
-      // CDP 不可用时不显示状态栏
+      // 注册表虽然标记为已配置，但 CDP 依然不通。
+      // 可能性 1: IDE 更新导致注册表被重置 (高频场景)
+      // 可能性 2: 用户通过命令行或其他不走注册表的方式启动 (常见场景)
+      
+      log("Registry marked configured but CDP dead. Initiating active specific repair...");
+      
+      // 尝试再次检测并修复注册表
+      const repairResult = await configureWindowsRegistry();
+      
+      if (repairResult.success) {
+          // 这里的 success=true 意味着我们刚刚执行了写入操作 (发现注册表里缺参数)
+          // 说明环境确实坏了（通常是 IDE 更新导致的），现在修好了
+          log("Active Repair: Registry was broken and has been fixed.");
+          
+          vscode.window.showWarningMessage(
+            "⚡ Auto-Agent: 检测到连接参数丢失（可能是 IDE 更新导致），已尝试自动修复。",
+            "立即重启生效"
+          ).then(selection => {
+              if (selection === "立即重启生效") handleRelaunch();
+          });
+      } else {
+          // 注册表看起来是好的，但还是不通。说明启动方式绕过了注册表 (如 code . 或 第三方工具)
+          log("Active Repair: Registry looks fine. Launch method likely bypassed it.");
+          
+          // 给用户一个显式的修复入口，而不是只改状态栏
+          vscode.window.showInformationMessage(
+             "⚡ Auto-Agent: 当前启动方式未包含智能连接参数，AI 自动化将受限。",
+             "重启并修复",
+             "忽略"
+          ).then(selection => {
+             if (selection === "重启并修复") handleRelaunch();
+          });
+          
+          // 同时也显示在状态栏
+          vscode.window.setStatusBarMessage(
+            "⚡ auto-all: 连接受限 (点击状态栏修复)",
+            8000
+          );
+      }
+      
     } else if (skipPrompt) {
       log(
         "CDP not available, but user chose to skip. Running in limited mode.",
