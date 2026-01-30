@@ -8,7 +8,7 @@ out
 .vscode-test
 vsc-extension-quickstart.md
 .gemini
-package-lock.json
+
 .env
 temp_vsix
 vsix_check
