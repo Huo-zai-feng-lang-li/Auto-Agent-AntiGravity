@@ -52,7 +52,7 @@ class CDPHandler {
 
     getPages(port) {
         return new Promise((resolve, reject) => {
-            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/list', timeout: 1000 }, (res) => {
+            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/list', timeout: 200 }, (res) => { // Aggressive timeout (200ms) for fast failure
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {

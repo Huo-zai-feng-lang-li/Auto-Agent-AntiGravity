@@ -41,6 +41,7 @@ let statusBarItem;
 let outputChannel;
 let currentIDE = "unknown";
 let globalContext;
+let isConnectionLimited = false;
 
 let cdpHandler;
 let relauncher;
@@ -105,7 +106,10 @@ async function activate(context) {
     }
 
     // 保存多标签模式状态，但不立即恢复
-    savedBackgroundModeState = context.globalState.get(BACKGROUND_MODE_KEY, false);
+    savedBackgroundModeState = context.globalState.get(
+      BACKGROUND_MODE_KEY,
+      false,
+    );
     backgroundModeEnabled = false; // 先设为关闭，等 CDP 连接成功后再恢复
 
     const config = vscode.workspace.getConfiguration("auto-all");
@@ -145,7 +149,8 @@ async function activate(context) {
         BASE_CDP_PORT,
       } = require("./main_scripts/relauncher");
 
-      cdpHandler = new CDPHandler(BASE_CDP_PORT, BASE_CDP_PORT + 10, log);
+      // Reduce scan range for faster startup check (9000-9002 is usually enough to know if it's working)
+      cdpHandler = new CDPHandler(BASE_CDP_PORT, BASE_CDP_PORT + 2, log);
       if (cdpHandler.setProStatus) {
         cdpHandler.setProStatus(isPro);
       }
@@ -298,7 +303,7 @@ async function configureWindowsRegistry() {
   const registryPaths = [
     `HKCU\\Software\\Classes\\${ideName}\\shell\\open\\command`,
     `HKCU\\Software\\Classes\\${ideName}-url\\shell\\open\\command`,
-    `HKCU\\Software\\Classes\\Applications\\${ideName}.exe\\shell\\open\\command`
+    `HKCU\\Software\\Classes\\Applications\\${ideName}.exe\\shell\\open\\command`,
   ];
 
   const { execSync } = require("child_process");
@@ -307,30 +312,30 @@ async function configureWindowsRegistry() {
   // 1. 尝试从快捷方式获取“完美参数串”（包含 GPU 参数、CDP 参数等）
   let bestArgs = null;
   if (relauncher) {
-      try {
-          const shortcuts = await relauncher.findIDEShortcuts();
-          // 找一个参数最长的快捷方式，通常意味着包含用户配置
-          const richShortcut = shortcuts
-              .filter(s => s.args && s.args.length > 0)
-              .sort((a, b) => b.args.length - a.args.length)[0];
-          
-          if (richShortcut) {
-            log(`Found rich shortcut arguments to sync: ${richShortcut.args}`);
-            bestArgs = richShortcut.args;
-          }
-      } catch (e) {
-          log(`Error fetching shortcut args: ${e.message}`);
+    try {
+      const shortcuts = await relauncher.findIDEShortcuts();
+      // 找一个参数最长的快捷方式，通常意味着包含用户配置
+      const richShortcut = shortcuts
+        .filter((s) => s.args && s.args.length > 0)
+        .sort((a, b) => b.args.length - a.args.length)[0];
+
+      if (richShortcut) {
+        log(`Found rich shortcut arguments to sync: ${richShortcut.args}`);
+        bestArgs = richShortcut.args;
       }
+    } catch (e) {
+      log(`Error fetching shortcut args: ${e.message}`);
+    }
   }
 
   // 如果没找到快捷方式参数，使用默认的 CDP 参数
   if (!bestArgs) {
-      bestArgs = `--remote-debugging-port=${CDP_PORT}`;
+    bestArgs = `--remote-debugging-port=${CDP_PORT}`;
   }
 
   // 确保参数里肯定有 CDP 端口
   if (!bestArgs.includes("--remote-debugging-port")) {
-      bestArgs = `--remote-debugging-port=${CDP_PORT} ${bestArgs}`;
+    bestArgs = `--remote-debugging-port=${CDP_PORT} ${bestArgs}`;
   }
 
   for (const regPath of registryPaths) {
@@ -339,7 +344,7 @@ async function configureWindowsRegistry() {
       const result = execSync(`reg query "${regPath}" /ve`, {
         encoding: "utf8",
         timeout: 5000,
-        stdio: ['ignore', 'pipe', 'ignore'] // 忽略 stderr 防止抛错中断
+        stdio: ["ignore", "pipe", "ignore"], // 忽略 stderr 防止抛错中断
       });
 
       // 解析当前命令
@@ -352,28 +357,36 @@ async function configureWindowsRegistry() {
       const exeMatch = currentCmd.match(/^(".*?\.exe"|[^ ]+\.exe)/i);
       if (exeMatch) {
         const exePath = exeMatch[1];
-        
+
         // 构造新命令：EXE + 完美参数 + "%1"
         // 注意：注册表里的 %1 代表文件路径，必须保留
         const newCmd = `${exePath} ${bestArgs} "%1"`.trim();
 
         if (currentCmd === newCmd) {
-            log(`Registry ${regPath} is already perfect.`);
-            continue;
+          log(`Registry ${regPath} is already perfect.`);
+          continue;
         }
 
-        // 使用 PowerShell 修改注册表（处理特殊字符最稳）
-        const psCmd = `Set-ItemProperty -Path "HKCU:\\Software\\Classes\\${ideName}\\shell\\open\\command" -Name "(default)" -Value '${newCmd.replace(/'/g, "''")}'`;
-        // 尝试写入，如果路径不存在可能会失败（那是正常的，不是每个 IDE 都有所有注册表项）
+        // Use reg.exe instead of PowerShell for instant execution (no startup delay)
+        // Note: reg add /ve means set (Default) value. /d is data. /f is force overwrite.
+        // We need to be careful with quotes in the command string.
         try {
-            execSync(`powershell -Command "${psCmd}"`, {
-                encoding: "utf8",
-                timeout: 5000
-            });
-            log(`Updated registry: ${regPath} => ${bestArgs}`);
-            configured = true;
+          // Escape quotes for cmd/reg: double quote becomes backslash-quote or recursive quoting
+          // But execSync takes a string. simple approach: use single quotes for JS string, and care internal quotes
+          // actually reg.exe expects quotes around the value if it contains spaces.
+          // Command: reg add "Path" /ve /d "NewCmd" /f
+          const safeCmdProp = newCmd.replace(/"/g, '\\"');
+          const regAddCmd = `reg add "${regPath}" /ve /d "${safeCmdProp}" /f`;
+
+          execSync(regAddCmd, {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: "ignore" 
+          });
+          log(`Updated registry: ${regPath} => ${bestArgs}`);
+          configured = true;
         } catch (writeErr) {
-            // 忽略写入错误，可能是没有该键值
+          // 忽略写入错误，可能是没有该键值
         }
       }
     } catch (e) {
@@ -388,6 +401,7 @@ async function configureWindowsRegistry() {
 }
 
 async function checkEnvironmentAndStart() {
+  isConnectionLimited = false;
   log("Initializing Auto-Agent-AntiGravity environment...");
 
   // Always check CDP availability on startup (even if disabled)
@@ -398,17 +412,19 @@ async function checkEnvironmentAndStart() {
     // CDP 可用，标记注册表已配置（可能是用户手动配置的）
     await globalContext.globalState.update(CDP_REGISTRY_CONFIGURED_KEY, true);
     log("CDP available. Extension ready to work.");
-    
+
     // 标记 CDP 已连接成功
     hadCDPConnection = true;
-    
+
     // CDP 连接成功后，恢复用户之前保存的状态
     if (savedIsEnabledState) {
       isEnabled = true;
       backgroundModeEnabled = savedBackgroundModeState;
-      log(`CDP connected. Restored previous state: enabled=${isEnabled}, backgroundMode=${backgroundModeEnabled}`);
+      log(
+        `CDP connected. Restored previous state: enabled=${isEnabled}, backgroundMode=${backgroundModeEnabled}`,
+      );
     }
-    
+
     // CDP 连接成功，显示状态栏
     if (statusBarItem) {
       statusBarItem.show();
@@ -432,68 +448,94 @@ async function checkEnvironmentAndStart() {
 
       // [Smart Auto-Relaunch] 智能自动重启尝试
       // 如果用户是通过第三方软件启动的（没走注册表，也没走快捷方式），我们在这里拦截并自动重启一次
-      const lastAutoRelaunch = globalContext.globalState.get("auto-all-last-auto-relaunch-time", 0);
+      const lastAutoRelaunch = globalContext.globalState.get(
+        "auto-all-last-auto-relaunch-time",
+        0,
+      );
       const now = Date.now();
-      
+
       // 3分钟内只允许自动重启一次，防止死循环
       if (now - lastAutoRelaunch > 180000) {
-          log("[Smart Auto-Relaunch] CDP missing & Registry configured. Attempting ONE-TIME auto-relaunch...");
-          
-          // 立即更新时间戳，防止后续逻辑或下次启动时重复触发
-          await globalContext.globalState.update("auto-all-last-auto-relaunch-time", now);
+        log(
+          "[Smart Auto-Relaunch] CDP missing & Registry configured. Attempting ONE-TIME auto-relaunch...",
+        );
 
-          vscode.window.setStatusBarMessage("⚡ Auto-Agent: 检测到连接受限，正在智能自动重启修复...", 5000);
-          
-          // 确保注册表被再刷一次（兜底）
-          configureWindowsRegistry();
+        // 立即更新时间戳，防止后续逻辑或下次启动时重复触发
+        await globalContext.globalState.update(
+          "auto-all-last-auto-relaunch-time",
+          now,
+        );
 
-          const result = await relauncher.relaunchWithCDP();
-          if (result.success && result.action === "relaunched") {
-              log("[Smart Auto-Relaunch] Relaunch initiated successfully. Exiting.");
-              return; 
-          } else {
-              log(`[Smart Auto-Relaunch] Failed: ${result.message}`);
-          }
+        // Show a more visible notification instead of just a status bar message
+        vscode.window.showInformationMessage(
+          "⚡ Auto-Agent: 连接未就绪，正在自动重启以修复环境...",
+        );
+
+        // Immediately proceed to restart without waiting
+
+
+        // 确保注册表被再刷一次（兜底）
+        configureWindowsRegistry();
+
+        const result = await relauncher.relaunchWithCDP();
+        if (result.success && result.action === "relaunched") {
+          log(
+            "[Smart Auto-Relaunch] Relaunch initiated successfully. Exiting.",
+          );
+          return;
+        } else {
+          log(`[Smart Auto-Relaunch] Failed: ${result.message}`);
+        }
       } else {
-          log(`[Smart Auto-Relaunch] Skipped: Recently attempted at ${new Date(lastAutoRelaunch).toISOString()}`);
+        log(
+          `[Smart Auto-Relaunch] Skipped: Recently attempted at ${new Date(lastAutoRelaunch).toISOString()}`,
+        );
       }
-      
-      log("Registry marked configured but CDP dead. Initiating active specific repair...");
-      
+
+      log(
+        "Registry marked configured but CDP dead. Initiating active specific repair...",
+      );
+
       // 尝试再次检测并修复注册表
       const repairResult = await configureWindowsRegistry();
-      
+
       if (repairResult.success) {
-          // 这里的 success=true 意味着我们刚刚执行了写入操作 (发现注册表里缺参数)
-          // 说明环境确实坏了（通常是 IDE 更新导致的），现在修好了
-          log("Active Repair: Registry was broken and has been fixed.");
-          
-          vscode.window.showWarningMessage(
+        // 这里的 success=true 意味着我们刚刚执行了写入操作 (发现注册表里缺参数)
+        // 说明环境确实坏了（通常是 IDE 更新导致的），现在修好了
+        log("Active Repair: Registry was broken and has been fixed.");
+
+        vscode.window
+          .showWarningMessage(
             "⚡ Auto-Agent: 检测到连接参数丢失（可能是 IDE 更新导致），已尝试自动修复。",
-            "立即重启生效"
-          ).then(selection => {
-              if (selection === "立即重启生效") handleRelaunch();
+            "立即重启生效",
+          )
+          .then((selection) => {
+            if (selection === "立即重启生效") handleRelaunch();
           });
       } else {
-          // 注册表看起来是好的，但还是不通。说明启动方式绕过了注册表 (如 code . 或 第三方工具)
-          log("Active Repair: Registry looks fine. Launch method likely bypassed it.");
-          
-          // 给用户一个显式的修复入口，而不是只改状态栏
-          vscode.window.showInformationMessage(
-             "⚡ Auto-Agent: 当前启动方式未包含智能连接参数，AI 自动化将受限。",
-             "重启并修复",
-             "忽略"
-          ).then(selection => {
-             if (selection === "重启并修复") handleRelaunch();
+        // 注册表看起来是好的，但还是不通。说明启动方式绕过了注册表 (如 code . 或 第三方工具)
+        log(
+          "Active Repair: Registry looks fine. Launch method likely bypassed it.",
+        );
+
+        // 给用户一个显式的修复入口，而不是只改状态栏
+        vscode.window
+          .showInformationMessage(
+            "⚡ Auto-Agent: 当前启动方式未包含智能连接参数，AI 自动化将受限。",
+            "重启并修复",
+            "忽略",
+          )
+          .then((selection) => {
+            if (selection === "重启并修复") handleRelaunch();
           });
-          
-          // 同时也显示在状态栏
-          vscode.window.setStatusBarMessage(
-            "⚡ auto-all: 连接受限 (点击状态栏修复)",
-            8000
-          );
+
+        // 同时也显示在状态栏
+        // vscode.window.setStatusBarMessage(
+        //   "⚡ auto-all: 连接受限 (点击状态栏修复)",
+        //   8000,
+        // );
+        isConnectionLimited = true;
       }
-      
     } else if (skipPrompt) {
       log(
         "CDP not available, but user chose to skip. Running in limited mode.",
@@ -542,24 +584,24 @@ async function checkEnvironmentAndStart() {
     // 如果当前 CDP 是通的，说明我们有权限。
     // 此时要“趁机”把注册表和所有快捷方式都修一遍，防止 IDE 更新导致断链。
     if (cdpAvailable) {
-        setTimeout(async () => {
-            log("[Self-Healing] Starting silent environment repair...");
-            try {
-                // 1. 修复注册表 (覆盖双击文件打开的场景)
-                await configureWindowsRegistry();
-                
-                // 2. 修复所有快捷方式 (覆盖任务栏、桌面混用的场景)
-                if (relauncher) {
-                    const fixedCount = await relauncher.configureAllShortcuts();
-                    if (fixedCount > 0) {
-                        log(`[Self-Healing] Silently fixed ${fixedCount} shortcuts.`);
-                    }
-                }
-                log("[Self-Healing] Repair complete. Persistence ensured.");
-            } catch (e) {
-                log(`[Self-Healing] Failed: ${e.message}`);
+      setTimeout(async () => {
+        log("[Self-Healing] Starting silent environment repair...");
+        try {
+          // 1. 修复注册表 (覆盖双击文件打开的场景)
+          await configureWindowsRegistry();
+
+          // 2. 修复所有快捷方式 (覆盖任务栏、桌面混用的场景)
+          if (relauncher) {
+            const fixedCount = await relauncher.configureAllShortcuts();
+            if (fixedCount > 0) {
+              log(`[Self-Healing] Silently fixed ${fixedCount} shortcuts.`);
             }
-        }, 5000); // 延时 5 秒，避免拖慢启动速度
+          }
+          log("[Self-Healing] Repair complete. Persistence ensured.");
+        } catch (e) {
+          log(`[Self-Healing] Failed: ${e.message}`);
+        }
+      }, 5000); // 延时 5 秒，避免拖慢启动速度
     }
   }
   updateStatusBar();
@@ -608,6 +650,12 @@ async function handleToggle(context) {
 }
 
 async function handleRelaunch() {
+  // 重启前强制设置为开启状态，确保重启后自动连接
+  if (globalContext) {
+    await globalContext.globalState.update(GLOBAL_STATE_KEY, true);
+    isEnabled = true; // 立即更新内存状态
+  }
+
   if (!relauncher) {
     vscode.window.showErrorMessage("重启器未初始化。");
     return;
@@ -1084,6 +1132,14 @@ function startStatsCollection(context) {
 function updateStatusBar() {
   if (!statusBarItem) return;
 
+  if (isConnectionLimited) {
+    statusBarItem.text = "$(warning) 连接受限";
+    statusBarItem.tooltip = "检测到连接受限\n\n点击立即一键修复 (自动重启)";
+    statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    return;
+  }
+  statusBarItem.backgroundColor = undefined;
+
   // Create rich markdown tooltip
   const createTooltip = (state, action) => {
     const md = new vscode.MarkdownString();
@@ -1097,7 +1153,10 @@ function updateStatusBar() {
   // 如果 CDP 未连接，强制显示关闭状态
   if (!hadCDPConnection) {
     statusBarItem.text = "$(zap) 关闭";
-    statusBarItem.tooltip = createTooltip("未连接", "CDP 未连接，点击重试");
+    statusBarItem.tooltip = createTooltip(
+      "未连接",
+      "CDP 未连接，请使用桌面图标启动以携带参数",
+    );
     return;
   }
 
