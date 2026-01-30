@@ -595,53 +595,98 @@ exit 1
             return { success: true, action: 'none', message: 'CDP already available' };
         }
 
+        // 1. 尝试查找已有的快捷方式
         const shortcuts = await this.findIDEShortcuts();
-        if (shortcuts.length === 0) {
-            this.log('No shortcuts found');
-            return {
+        
+        let primaryShortcut = null;
+        let shortcutLaunchSuccess = false;
+
+        if (shortcuts.length > 0) {
+             // 修改策略：不仅仅是找到一个，而是修复所有能找到的快捷方式
+             // 但为了重启，我们还是需要选一个“主”快捷方式
+            await this.configureAllShortcuts(shortcuts);
+
+            primaryShortcut = shortcuts.find(s =>
+                s.type === 'startmenu' || s.type === 'wrapper' || s.type === 'user'
+            ) || shortcuts[0];
+
+            this.log(`Found ${shortcuts.length} shortcuts. Using primary: ${primaryShortcut.path}`);
+
+            const modifyResult = await this.ensureShortcutHasFlag(primaryShortcut);
+            
+            if (modifyResult.success) {
+                 if (modifyResult.modified) {
+                    primaryShortcut.hasFlag = true;
+                }
+                this.log('Relaunching via shortcut...');
+                const relaunchResult = await this.relaunchViaShortcut(primaryShortcut);
+
+                if (relaunchResult.success) {
+                    return {
+                        success: true,
+                        action: 'relaunched',
+                        message: modifyResult.modified
+                            ? '快捷方式已更新。正在重启并开启调试调试环境 (CDP)...'
+                            : '正在重启并开启调试环境 (CDP)...'
+                    };
+                }
+                // If relaunchViaShortcut failed, fall through to exe relaunch
+                this.log(`Shortcut relaunch failed: ${relaunchResult.error}`);
+            } else {
+                 this.log(`Shortcut modification failed: ${modifyResult.message}`);
+            }
+        } else {
+            this.log('No shortcuts found to modify.');
+        }
+
+        // 3. 【终极兜底】如果没有快捷方式（绿色版/直接EXE启动）或快捷方式修复/启动失败
+        // 直接使用当前进程的 EXE 路径进行带参热重启
+        this.log('Initiating Direct-EXE Hot Relaunch Fallback...');
+        
+        const exePath = process.execPath;
+        if (!exePath) {
+             return {
                 success: false,
                 action: 'error',
-                message: 'No IDE shortcuts found. Please create a shortcut first.'
+                message: 'Fatal: No shortcuts found and could not determine IDE executable path.'
             };
         }
 
-        // 修改策略：不仅仅是找到一个，而是修复所有能找到的快捷方式
-        // 但为了重启，我们还是需要选一个“主”快捷方式
-        await this.configureAllShortcuts(shortcuts);
+        try {
+            const { spawn } = require('child_process');
+            
+            // 核心参数
+            // 这里我们硬编码 9000，因为这是插件约定的端口
+            const args = ['--remote-debugging-port=9000'];
+            
+            // 尝试保留一些常见 GPU 优化参数（为了稳妥，硬编码一些常用的）
+            // 如果用户有特殊偏好，建议他们去创建快捷方式，这里只做兜底
+            args.push('--disable-gpu-driver-bug-workarounds'); 
+            args.push('--ignore-gpu-blacklist');
 
-        const primaryShortcut = shortcuts.find(s =>
-            s.type === 'startmenu' || s.type === 'wrapper' || s.type === 'user'
-        ) || shortcuts[0];
+            this.log(`Spawning direct relaunch: "${exePath}" ${args.join(' ')}`);
 
-        const modifyResult = await this.ensureShortcutHasFlag(primaryShortcut);
-        if (!modifyResult.success) {
-            return {
-                success: false,
-                action: 'error',
-                message: `Failed to modify shortcut: ${modifyResult.message}`
-            };
-        }
+            const child = spawn(exePath, args, {
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: false
+            });
 
-        if (modifyResult.modified) {
-            primaryShortcut.hasFlag = true;
-        }
-
-        this.log('Relaunching IDE...');
-        const relaunchResult = await this.relaunchViaShortcut(primaryShortcut);
-
-        if (relaunchResult.success) {
+            child.unref();
+            
+            // Give it a moment to spawn before we die
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
             return {
                 success: true,
                 action: 'relaunched',
-                message: modifyResult.modified
-                    ? '快捷方式已更新。正在重启并开启调试调试环境 (CDP)...'
-                    : '正在重启并开启调试环境 (CDP)...'
+                message: '找不到可用快捷方式，正在通过 EXE 直接热重启...' 
             };
-        } else {
-            return {
+        } catch (e) {
+             return {
                 success: false,
                 action: 'error',
-                message: `重启失败: ${relaunchResult.error}`
+                message: `Direct exe relaunch failed: ${e.message}`
             };
         }
     }

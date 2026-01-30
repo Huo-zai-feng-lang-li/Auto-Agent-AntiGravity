@@ -72,7 +72,7 @@
 
 **示例（包含 GPU 优化参数）：**
 
-> `...Antigravity.exe" --remote-debugging-port=9000 --disable-gpu-driver-bug-workarounds --ignore-gpu-blacklist`
+> `C:\Users\Administrator\AppData\Local\Programs\Antigravity\Antigravity.exe --remote-debugging-port=9000 --disable-gpu-driver-bug-workarounds --ignore-gpu-blacklist --enable-gpu-rasterization`
 
 #### 2. 参数继承机制 (v1.0.29+)
 
