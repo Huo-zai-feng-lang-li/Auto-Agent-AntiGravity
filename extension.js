@@ -429,6 +429,34 @@ async function checkEnvironmentAndStart() {
       // 注册表虽然标记为已配置，但 CDP 依然不通。
       // 可能性 1: IDE 更新导致注册表被重置 (高频场景)
       // 可能性 2: 用户通过命令行或其他不走注册表的方式启动 (常见场景)
+
+      // [Smart Auto-Relaunch] 智能自动重启尝试
+      // 如果用户是通过第三方软件启动的（没走注册表，也没走快捷方式），我们在这里拦截并自动重启一次
+      const lastAutoRelaunch = globalContext.globalState.get("auto-all-last-auto-relaunch-time", 0);
+      const now = Date.now();
+      
+      // 3分钟内只允许自动重启一次，防止死循环
+      if (now - lastAutoRelaunch > 180000) {
+          log("[Smart Auto-Relaunch] CDP missing & Registry configured. Attempting ONE-TIME auto-relaunch...");
+          
+          // 立即更新时间戳，防止后续逻辑或下次启动时重复触发
+          await globalContext.globalState.update("auto-all-last-auto-relaunch-time", now);
+
+          vscode.window.setStatusBarMessage("⚡ Auto-Agent: 检测到连接受限，正在智能自动重启修复...", 5000);
+          
+          // 确保注册表被再刷一次（兜底）
+          configureWindowsRegistry();
+
+          const result = await relauncher.relaunchWithCDP();
+          if (result.success && result.action === "relaunched") {
+              log("[Smart Auto-Relaunch] Relaunch initiated successfully. Exiting.");
+              return; 
+          } else {
+              log(`[Smart Auto-Relaunch] Failed: ${result.message}`);
+          }
+      } else {
+          log(`[Smart Auto-Relaunch] Skipped: Recently attempted at ${new Date(lastAutoRelaunch).toISOString()}`);
+      }
       
       log("Registry marked configured but CDP dead. Initiating active specific repair...");
       

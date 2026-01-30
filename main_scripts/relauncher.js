@@ -699,15 +699,15 @@ exit 1
         this.log('Showing relaunch prompt');
 
         const choice = await vscode.window.showInformationMessage(
-            'Auto-Agent-AntiGravity 需要一次性快速设置以开启后台模式。这将以必要的权限重启您的 IDE。',
+            'Auto-Agent 需要重启以连接调试端口。我们将尝试自动修复环境（支持快捷方式修复及热重启）。',
             { modal: false },
-            '设置并重启',
+            '立即重启修复',
             '暂不设置'
         );
 
         this.log(`User chose: ${choice}`);
 
-        if (choice === '设置并重启') {
+        if (choice === '立即重启修复') {
             const result = await this.relaunchWithCDP();
 
             if (!result.success) {
