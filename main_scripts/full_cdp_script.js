@@ -243,17 +243,31 @@
         });
     }
 
-    const getDocuments = (root = document) => {
+    let cachedDocuments = null;
+    let cachedDocsTimestamp = 0;
+    const DOCS_CACHE_DURATION = 1500;
+
+    const getDocuments = (root = document, forceRefresh = false) => {
+        const now = Date.now();
+        if (root === document && !forceRefresh && cachedDocuments && (now - cachedDocsTimestamp < DOCS_CACHE_DURATION)) {
+            return cachedDocuments;
+        }
+
         let docs = [root];
         try {
             const iframes = root.querySelectorAll('iframe, frame');
             for (const iframe of iframes) {
                 try {
                     const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-                    if (iframeDoc) docs.push(...getDocuments(iframeDoc));
+                    if (iframeDoc) docs.push(...getDocuments(iframeDoc, true));
                 } catch (e) { }
             }
         } catch (e) { }
+
+        if (root === document) {
+            cachedDocuments = docs;
+            cachedDocsTimestamp = now;
+        }
         return docs;
     };
 
@@ -710,7 +724,10 @@
             'button.grow' // Antigravity specific
         ];
 
-        const requestActionCheck = () => { actionCheckRequested = true; };
+        const requestActionCheck = () => { 
+            actionCheckRequested = true; 
+            cachedDocuments = null;
+        };
 
         const installActionObservers = () => {
             getDocuments().forEach(doc => {
@@ -751,7 +768,8 @@
 
             // If not in background mode, we just stay on this tab and poll
             if (!isBG) {
-                await workerDelay(Math.max(window.__autoAllState.pollInterval || 1000, 5000));
+                const limit = window.__autoAllState.isPro ? 200 : 5000;
+                await workerDelay(Math.max(window.__autoAllState.pollInterval || 1000, limit));
                 continue;
             }
 
@@ -867,6 +885,7 @@
 
             state.isRunning = true;
             state.currentMode = ide;
+            state.isPro = isPro;
             state.isBackgroundMode = isBG;
             state.sessionID++;
             const sid = state.sessionID;

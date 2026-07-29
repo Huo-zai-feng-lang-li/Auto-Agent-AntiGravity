@@ -57,13 +57,14 @@ class SettingsPanel {
         switch (message.command) {
           case "setFrequency":
             if (this.isPro()) {
+              const freqVal = parseInt(message.value, 10) || 1000;
               await this.context.globalState.update(
                 "auto-all-frequency",
-                message.value,
+                freqVal,
               );
               vscode.commands.executeCommand(
                 "auto-all.updateFrequency",
-                message.value,
+                freqVal,
               );
             }
             break;
@@ -203,6 +204,7 @@ class SettingsPanel {
     const packageJson = require("../package.json");
     const version = packageJson.version;
     const bgUri = this.panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'bg.jpg'));
+    const frequency = this.context.globalState.get("auto-all-frequency", 1000);
 
     const css = `
             @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -570,9 +572,9 @@ class SettingsPanel {
                 <div class="glass-panel">
                     <div class="panel-header">
                         <div class="panel-title">⚡ 性能引擎调节</div>
-                        <div class="panel-title" id="freqVal" style="font-size: 14px; color: var(--accent-primary);">1.0s / 频率</div>
+                        <div class="panel-title" id="freqVal" style="font-size: 14px; color: var(--accent-primary);">${(frequency / 1000).toFixed(1)}s / 频率</div>
                     </div>
-                    <input type="range" id="freqSlider" min="200" max="3000" step="100" value="1000">
+                    <input type="range" id="freqSlider" min="200" max="3000" step="100" value="${frequency}">
                     <p style="text-align: center; font-size: 12px; color: var(--text-secondary); margin-top: 8px;">越低的频率响应越快，但可能增加系统负载</p>
                 </div>
 
@@ -634,6 +636,13 @@ class SettingsPanel {
 
                     window.addEventListener('message', event => {
                         const message = event.data;
+                        if (message.command === 'updateStats') {
+                            const val = message.frequency;
+                            if (document.activeElement !== slider) {
+                                slider.value = val;
+                                valDisplay.innerText = (val/1000).toFixed(1) + 's / 频率';
+                            }
+                        }
                         if (message.command === 'updateROIStats') {
                             const roi = message.roiStats;
                             if (roi) {

@@ -14,7 +14,7 @@ async function testEventDrivenRendererLoop() {
   assert.doesNotThrow(() => new Function(source));
   assert.match(source, /new MutationObserver/);
   assert.match(source, /attributeFilter: \['class', 'disabled', 'aria-disabled', 'style'\]/);
-  assert.match(source, /Math\.max\(window\.__autoAllState\.pollInterval \|\| 1000, 5000\)/);
+  assert.match(source, /Math\.max\(window\.__autoAllState\.pollInterval \|\| 1000, limit\)/);
 }
 
 async function testPendingCommandsAreRejectedOnDisconnect() {
