@@ -67,12 +67,12 @@
 右键点击 IDE 桌面快捷方式 -> **属性** -> **目标**，在原有路径末尾添加空格和以下参数：
 
 ```text
---remote-debugging-port=9000
+--remote-debugging-port=9222
 ```
 
 **示例（包含 GPU 优化参数）：**
 
-> `C:\Users\Administrator\AppData\Local\Programs\Antigravity\Antigravity.exe --remote-debugging-port=9000 --disable-gpu-driver-bug-workarounds --ignore-gpu-blacklist --enable-gpu-rasterization`
+> `C:\Users\Administrator\AppData\Local\Programs\Antigravity\Antigravity.exe --remote-debugging-port=9222 --disable-gpu-driver-bug-workarounds --ignore-gpu-blacklist --enable-gpu-rasterizatio`
 
 #### 2. 参数继承机制 (v1.0.29+)
 

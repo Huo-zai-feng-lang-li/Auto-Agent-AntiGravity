@@ -109,8 +109,9 @@ class CDPHandler {
                 try {
                     const msg = JSON.parse(data.toString());
                     if (msg.id && this.pendingMessages.has(msg.id)) {
-                        const { resolve: res, reject: rej } = this.pendingMessages.get(msg.id);
+                        const { resolve: res, reject: rej, timer } = this.pendingMessages.get(msg.id);
                         this.pendingMessages.delete(msg.id);
+                        clearTimeout(timer);
                         msg.error ? rej(new Error(msg.error.message)) : res(msg.result);
                     }
                 } catch (e) { }
@@ -118,10 +119,12 @@ class CDPHandler {
             ws.on('error', (err) => {
                 this.log(`WS Error on ${page.id}: ${err.message}`);
                 this.connections.delete(page.id);
+                this.rejectPendingForPage(page.id, err);
                 resolve(false);
             });
             ws.on('close', () => {
                 this.connections.delete(page.id);
+                this.rejectPendingForPage(page.id, new Error('CDP connection closed'));
             });
         });
     }
@@ -176,15 +179,24 @@ class CDPHandler {
         if (!conn || conn.ws.readyState !== WebSocket.OPEN) return Promise.reject('dead');
         const id = this.messageId++;
         return new Promise((resolve, reject) => {
-            this.pendingMessages.set(id, { resolve, reject });
-            conn.ws.send(JSON.stringify({ id, method, params }));
-            setTimeout(() => {
+            const timer = setTimeout(() => {
                 if (this.pendingMessages.has(id)) {
                     this.pendingMessages.delete(id);
                     reject(new Error('timeout'));
                 }
-            }, 2000); 
+            }, 2000);
+            this.pendingMessages.set(id, { resolve, reject, timer, pageId });
+            conn.ws.send(JSON.stringify({ id, method, params }));
         });
+    }
+
+    rejectPendingForPage(pageId, error) {
+        for (const [id, pending] of this.pendingMessages) {
+            if (pending.pageId !== pageId) continue;
+            clearTimeout(pending.timer);
+            this.pendingMessages.delete(id);
+            pending.reject(error);
+        }
     }
 
     async hideBackgroundOverlay() {
@@ -315,6 +327,11 @@ class CDPHandler {
     disconnectAll() {
         for (const [, conn] of this.connections) try { conn.ws.close(); } catch (e) { }
         this.connections.clear();
+        for (const [id, pending] of this.pendingMessages) {
+            clearTimeout(pending.timer);
+            pending.reject(new Error('CDP disconnected'));
+            this.pendingMessages.delete(id);
+        }
     }
 }
 

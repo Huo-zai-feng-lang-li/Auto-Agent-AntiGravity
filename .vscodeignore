@@ -1,6 +1,7 @@
 .vscode/**
 .github/**
 .agent/**
+.codegraph/**
 test/**
 CONTRIBUTING.md
 CONTRIBUTING-EN.md

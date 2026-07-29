@@ -684,6 +684,9 @@
         log('[Loop] Unified Smart Loop STARTED');
         let index = 0;
         let cycle = 0;
+        let actionCheckRequested = true;
+        let actionCheckRunning = false;
+        const observers = [];
 
         const UNIVERSAL_BTN_SELECTORS = [
             'button', 
@@ -707,17 +710,48 @@
             'button.grow' // Antigravity specific
         ];
 
+        const requestActionCheck = () => { actionCheckRequested = true; };
+
+        const installActionObservers = () => {
+            getDocuments().forEach(doc => {
+                if (!doc || typeof MutationObserver === 'undefined') return;
+                const observer = new MutationObserver(mutations => {
+                    if (mutations.some(mutation => mutation.type === 'childList' || mutation.type === 'attributes')) {
+                        requestActionCheck();
+                    }
+                });
+                observer.observe(doc, {
+                    subtree: true,
+                    childList: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'disabled', 'aria-disabled', 'style']
+                });
+                observers.push(observer);
+            });
+        };
+
+        installActionObservers();
+
         while (window.__autoAllState.isRunning && window.__autoAllState.sessionID === sid) {
             cycle++;
             const isBG = window.__autoAllState.isBackgroundMode;
             
             // 1. CLICK ACTIONS
-            const clicked = await performClick(UNIVERSAL_BTN_SELECTORS);
+            let clicked = 0;
+            if (actionCheckRequested && !actionCheckRunning) {
+                actionCheckRequested = false;
+                actionCheckRunning = true;
+                try {
+                    clicked = await performClick(UNIVERSAL_BTN_SELECTORS);
+                } finally {
+                    actionCheckRunning = false;
+                }
+            }
             if (clicked > 0) log(`[Loop] Cycle ${cycle}: Clicked ${clicked} actions`);
 
             // If not in background mode, we just stay on this tab and poll
             if (!isBG) {
-                await workerDelay(window.__autoAllState.pollInterval || 1000);
+                await workerDelay(Math.max(window.__autoAllState.pollInterval || 1000, 5000));
                 continue;
             }
 
@@ -766,6 +800,7 @@
             updateOverlay();
             await workerDelay(2500); 
         }
+        observers.forEach(observer => observer.disconnect());
         log('[Loop] Unified Smart Loop STOPPED');
     }
 
