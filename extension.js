@@ -162,15 +162,9 @@ async function activate(context) {
         cdpHandler.setProStatus(isPro);
       }
 
-      // 注册任务完成事件：当 AI 模型回答完成且用户不在当前窗口时，发送全局置顶通知
+      // 注册任务完成事件：当 AI 模型回答完成时，发送全局置顶通知
       let lastCompletedNotifyTime = 0;
       cdpHandler.setOnTaskCompletedCallback(() => {
-        // 如果当前窗口正处于焦点（用户正看着屏幕），则无需弹窗打扰
-        if (vscode.window.state.focused) {
-          log("[Event] Window is currently focused, skipping popup notification.");
-          return;
-        }
-
         const now = Date.now();
         if (now - lastCompletedNotifyTime < 5000) {
           log("[Event] TASK_COMPLETED notification throttled (within 5s cooldown).");

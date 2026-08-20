@@ -52,16 +52,16 @@ class TaskNotifier {
             ? availableCardFiles[Math.floor(Math.random() * availableCardFiles.length)]
             : 'card_1.png';
 
-        const targetImagePath = path.join(mediaDir, chosenFile).replace(/\\/g, '\\\\');
+        const targetImagePath = path.join(mediaDir, chosenFile).replace(/\\/g, '/');
 
         let xamlBody = '';
         let winH = 180;
         let winW = 380;
 
         if (style === 'image' && fs.existsSync(path.join(mediaDir, chosenFile))) {
-            // 模式 1：随机轮播高奢艺术卡片（全画幅 · 极清悬浮 · 柔光弥散 · 丝滑圆角）
-            winH = 180;
-            winW = 380;
+            // 模式 1：随机轮播高奢艺术卡片（全画幅 · 2:1 极清悬浮 · 柔光弥散 · 丝滑圆角 · 0 裁切失真）
+            winH = 206;
+            winW = 396;
             xamlBody = `
     <Border CornerRadius="16" 
             Cursor="Hand"
@@ -73,8 +73,7 @@ class TaskNotifier {
         </Border.Effect>
         <Border CornerRadius="16" 
                 BorderBrush="#3338BDF8" 
-                BorderThickness="1"
-                Background="#0B0D14">
+                BorderThickness="1">
             <Border.Background>
                 <ImageBrush ImageSource="${targetImagePath}" Stretch="UniformToFill"/>
             </Border.Background>
