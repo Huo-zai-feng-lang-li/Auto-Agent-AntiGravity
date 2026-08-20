@@ -749,6 +749,32 @@
 
         installActionObservers();
 
+        let isWorking = false;
+        let lastWorkTime = 0;
+        let taskCompletedEmitted = true;
+        let lastSidePanelTextLength = 0;
+        let generationStartCount = 0;
+
+        function checkIsGenerating() {
+            const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], [role="button"][aria-label*="Stop" i], button[title*="Stop" i], .codicon-stop, .codicon-debug-stop');
+            if (stopBtn && isElementVisible(stopBtn)) return true;
+
+            const spinner = document.querySelector('.animate-spin, .codicon-loading, [aria-busy="true"], .monaco-progress-container.active, .progress-item.active');
+            if (spinner && isElementVisible(spinner)) return true;
+
+            const panel = document.querySelector('.antigravity-agent-side-panel') || document.querySelector('.chat-session-item') || document.querySelector('.interactive-session') || document.body;
+            if (panel) {
+                const currentLen = (panel.innerText || panel.textContent || '').length;
+                if (lastSidePanelTextLength !== 0 && currentLen > lastSidePanelTextLength) {
+                    lastSidePanelTextLength = currentLen;
+                    return true;
+                }
+                lastSidePanelTextLength = currentLen;
+            }
+
+            return false;
+        }
+
         while (window.__autoAllState.isRunning && window.__autoAllState.sessionID === sid) {
             cycle++;
             const isBG = window.__autoAllState.isBackgroundMode;
@@ -764,7 +790,33 @@
                     actionCheckRunning = false;
                 }
             }
-            if (clicked > 0) log(`[Loop] Cycle ${cycle}: Clicked ${clicked} actions`);
+            if (clicked > 0) {
+                log(`[Loop] Cycle ${cycle}: Clicked ${clicked} actions`);
+                isWorking = true;
+                lastWorkTime = Date.now();
+                taskCompletedEmitted = false;
+            }
+
+            // 2. 状态机：仅在模型真实执行生成且生成结束后触发一次通知
+            const generating = checkIsGenerating();
+            if (generating) {
+                generationStartCount++;
+                if (generationStartCount >= 2) {
+                    isWorking = true;
+                    lastWorkTime = Date.now();
+                    taskCompletedEmitted = false;
+                }
+            } else if (isWorking) {
+                if (Date.now() - lastWorkTime > 3000 && !taskCompletedEmitted) {
+                    log('[Event] AI Generation Completed! Emitting TASK_COMPLETED event...');
+                    console.log('[AUTO_AGENT_EVENT:TASK_COMPLETED]');
+                    taskCompletedEmitted = true;
+                    isWorking = false;
+                    generationStartCount = 0;
+                }
+            } else {
+                generationStartCount = 0;
+            }
 
             // If not in background mode, we just stay on this tab and poll
             if (!isBG) {

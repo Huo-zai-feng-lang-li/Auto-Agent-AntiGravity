@@ -68,6 +68,24 @@ class SettingsPanel {
               );
             }
             break;
+          case "setNotifyStyle":
+            await this.context.globalState.update(
+              "auto-all-notify-style",
+              message.style,
+            );
+            this.sendStats();
+            break;
+          case "testNotify":
+            {
+              const { TaskNotifier } = require("./taskNotifier");
+              const testNotifier = new TaskNotifier();
+              testNotifier.notify({
+                title: "🎉 测试通知",
+                message: "思考与生成已完成 · 点击切回 IDE",
+                style: message.style || this.context.globalState.get("auto-all-notify-style", "image"),
+              });
+            }
+            break;
           case "getStats":
             this.sendStats();
             break;
@@ -157,11 +175,13 @@ class SettingsPanel {
     const frequency = isPro
       ? this.context.globalState.get("auto-all-frequency", 1000)
       : 300;
+    const notifyStyle = this.context.globalState.get("auto-all-notify-style", "image");
 
     this.panel.webview.postMessage({
       command: "updateStats",
       stats,
       frequency,
+      notifyStyle,
       isPro,
     });
   }
@@ -580,6 +600,28 @@ class SettingsPanel {
 
                 <div class="glass-panel">
                     <div class="panel-header">
+                        <div class="panel-title">🎨 完成通知展示风格</div>
+                        <div class="reset-tag" id="currentStyleTag">当前：艺术图卡片</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                        <div id="cardImageStyle" class="tool-card" style="cursor: pointer; border: 2px solid #4f46e5; background: #fff;">
+                            <span class="tool-icon">🖼️</span>
+                            <strong style="font-size: 14px; margin-bottom: 4px;">精美艺术图卡片</strong>
+                            <span style="font-size: 11px; color: #64748b; text-align: center;">极简现代艺术图 · 零黑边 · 极清悬浮</span>
+                        </div>
+                        <div id="cardUiStyle" class="tool-card" style="cursor: pointer; border: 1px solid #e2e8f0;">
+                            <span class="tool-icon">🪟</span>
+                            <strong style="font-size: 14px; margin-bottom: 4px;">原生极清毛玻璃</strong>
+                            <span style="font-size: 11px; color: #64748b; text-align: center;">DirectWrite 矢量渲染 · 科技感流光条</span>
+                        </div>
+                    </div>
+                    <button id="testNotifyBtn" class="btn" style="background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);">
+                        <span>📣 立即测试当前通知效果</span>
+                    </button>
+                </div>
+
+                <div class="glass-panel">
+                    <div class="panel-header">
                         <div class="panel-title">🛡️ 安全拦截防火墙</div>
                     </div>
                     <textarea id="bannedCommandsInput" spellcheck="false" placeholder="在此输入需要自动拦截的危险命令关键词（每行一个）..."></textarea>
@@ -634,6 +676,43 @@ class SettingsPanel {
                         vscode.postMessage({ command: 'updateBannedCommands', commands });
                     });
 
+                    const cardImage = document.getElementById('cardImageStyle');
+                    const cardUi = document.getElementById('cardUiStyle');
+                    const currentStyleTag = document.getElementById('currentStyleTag');
+                    const testNotifyBtn = document.getElementById('testNotifyBtn');
+                    let currentStyle = 'image';
+
+                    function applyStyleUI(style) {
+                        currentStyle = style;
+                        if (style === 'ui') {
+                            cardUi.style.border = '2px solid #4f46e5';
+                            cardUi.style.background = '#fff';
+                            cardImage.style.border = '1px solid #e2e8f0';
+                            cardImage.style.background = 'linear-gradient(135deg, #fff 0%, #f1f5f9 100%)';
+                            currentStyleTag.innerText = '当前：原生毛玻璃';
+                        } else {
+                            cardImage.style.border = '2px solid #4f46e5';
+                            cardImage.style.background = '#fff';
+                            cardUi.style.border = '1px solid #e2e8f0';
+                            cardUi.style.background = 'linear-gradient(135deg, #fff 0%, #f1f5f9 100%)';
+                            currentStyleTag.innerText = '当前：艺术图卡片';
+                        }
+                    }
+
+                    cardImage.addEventListener('click', () => {
+                        applyStyleUI('image');
+                        vscode.postMessage({ command: 'setNotifyStyle', style: 'image' });
+                    });
+
+                    cardUi.addEventListener('click', () => {
+                        applyStyleUI('ui');
+                        vscode.postMessage({ command: 'setNotifyStyle', style: 'ui' });
+                    });
+
+                    testNotifyBtn.addEventListener('click', () => {
+                        vscode.postMessage({ command: 'testNotify', style: currentStyle });
+                    });
+
                     window.addEventListener('message', event => {
                         const message = event.data;
                         if (message.command === 'updateStats') {
@@ -641,6 +720,9 @@ class SettingsPanel {
                             if (document.activeElement !== slider) {
                                 slider.value = val;
                                 valDisplay.innerText = (val/1000).toFixed(1) + 's / 频率';
+                            }
+                            if (message.notifyStyle) {
+                                applyStyleUI(message.notifyStyle);
                             }
                         }
                         if (message.command === 'updateROIStats') {

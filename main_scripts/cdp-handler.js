@@ -16,6 +16,7 @@ class CDPHandler {
         this.isEnabled = false;
         this.isPro = false;
         this.logFilePath = null;
+        this.onTaskCompletedCallback = null;
     }
 
     setLogFile(filePath) {
@@ -98,11 +99,21 @@ class CDPHandler {
         Promise.allSettled(stopPromises);
     }
 
+    setOnTaskCompletedCallback(callback) {
+        this.onTaskCompletedCallback = callback;
+    }
+
     async connectToPage(page) {
         return new Promise((resolve) => {
             const ws = new WebSocket(page.webSocketDebuggerUrl);
-            ws.on('open', () => {
+            ws.on('open', async () => {
                 this.connections.set(page.id, { ws, injected: false });
+                try {
+                    await this.sendCommand(page.id, 'Runtime.enable', {});
+                    this.log(`Runtime.enable succeeded on page ${page.id}`);
+                } catch (e) {
+                    this.log(`Runtime.enable failed on page ${page.id}: ${e.message || e}`);
+                }
                 resolve(true);
             });
             ws.on('message', (data) => {
@@ -113,6 +124,14 @@ class CDPHandler {
                         this.pendingMessages.delete(msg.id);
                         clearTimeout(timer);
                         msg.error ? rej(new Error(msg.error.message)) : res(msg.result);
+                    } else if (msg.method === 'Runtime.consoleAPICalled' && msg.params?.args) {
+                        const text = msg.params.args.map(a => a.value || '').join(' ');
+                        if (text.includes('[AUTO_AGENT_EVENT:TASK_COMPLETED]')) {
+                            this.log(`Received TASK_COMPLETED event from page ${page.id}`);
+                            if (this.onTaskCompletedCallback) {
+                                this.onTaskCompletedCallback({ pageId: page.id });
+                            }
+                        }
                     }
                 } catch (e) { }
             });
@@ -134,7 +153,6 @@ class CDPHandler {
         if (!conn) return;
 
         try {
-            
             if (!conn.injected) {
                 const script = this.getComposedScript();
                 const result = await this.sendCommand(pageId, 'Runtime.evaluate', {
@@ -170,7 +188,13 @@ class CDPHandler {
     }
 
     getComposedScript() {
-        const scriptPath = path.join(__dirname, '..', 'main_scripts', 'full_cdp_script.js');
+        let scriptPath = path.join(__dirname, '..', 'main_scripts', 'full_cdp_script.js');
+        if (!fs.existsSync(scriptPath)) {
+            scriptPath = path.join(__dirname, 'main_scripts', 'full_cdp_script.js');
+        }
+        if (!fs.existsSync(scriptPath)) {
+            scriptPath = path.join(__dirname, '..', '..', 'main_scripts', 'full_cdp_script.js');
+        }
         return fs.readFileSync(scriptPath, 'utf8');
     }
 

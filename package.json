@@ -2,7 +2,7 @@
     "name": "Auto-Agent-AntiGravity",
     "displayName": "Auto-Agent-AntiGravity",
     "description": "释放全自动 AI Agent。自动接受文件修改、终端命令及恢复提示，实现零干预开发。",
-    "version": "1.0.38",
+    "version": "1.0.59",
     "publisher": "Huo-zai-feng-lang-li",
     "icon": "media/icon.png",
     "repository": {
@@ -24,9 +24,9 @@
     ],
     "scripts": {
         "test": "node test/integration-test.js",
-        "compile": "esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
+        "compile": "npx esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
         "vscode:prepublish": "npm run compile",
-        "package": "npx vsce package"
+        "package": "npx @vscode/vsce package"
     },
     "engines": {
         "vscode": "^1.75.0"

@@ -49,6 +49,7 @@ let isConnectionLimited = false;
 
 let cdpHandler;
 let relauncher;
+let globalTaskNotifier;
 
 // CDP health tracking for auto-recovery
 let hadCDPConnection = false;
@@ -152,12 +153,40 @@ async function activate(context) {
         Relauncher,
         BASE_CDP_PORT,
       } = require("./main_scripts/relauncher");
+      const { TaskNotifier } = require("./main_scripts/taskNotifier");
+      globalTaskNotifier = new TaskNotifier(log);
 
       // Reduce scan range for faster startup check (9000-9002 is usually enough to know if it's working)
       cdpHandler = new CDPHandler(BASE_CDP_PORT, BASE_CDP_PORT + 2, log);
       if (cdpHandler.setProStatus) {
         cdpHandler.setProStatus(isPro);
       }
+
+      // 注册任务完成事件：当 AI 模型回答完成且用户不在当前窗口时，发送全局置顶通知
+      let lastCompletedNotifyTime = 0;
+      cdpHandler.setOnTaskCompletedCallback(() => {
+        // 如果当前窗口正处于焦点（用户正看着屏幕），则无需弹窗打扰
+        if (vscode.window.state.focused) {
+          log("[Event] Window is currently focused, skipping popup notification.");
+          return;
+        }
+
+        const now = Date.now();
+        if (now - lastCompletedNotifyTime < 5000) {
+          log("[Event] TASK_COMPLETED notification throttled (within 5s cooldown).");
+          return;
+        }
+        lastCompletedNotifyTime = now;
+
+        log("[Event] Triggering desktop notification for task completion");
+        const notifyStyle = globalContext.globalState.get("auto-all-notify-style", "image");
+        globalTaskNotifier.notify({
+          title: "🎉 任务完成",
+          message: "思考与生成已完成 · 点击切回 IDE",
+          playSound: true,
+          style: notifyStyle,
+        });
+      });
 
       try {
         const logPath = path.join(context.extensionPath, "auto-all-cdp.log");
@@ -980,28 +1009,10 @@ async function showSessionSummaryNotification(context, summary) {
 }
 
 async function showAwayActionsNotification(context, actionsCount) {
+  // 用户明确要求：不需要离开期间处理动作的通知，仅保留模型回复完成通知
   log(
-    `[Notification] showAwayActionsNotification called with: ${actionsCount}`,
+    `[Notification] showAwayActionsNotification skipped by user preference (count: ${actionsCount})`,
   );
-  if (!actionsCount || actionsCount === 0) {
-    log(`[Notification] Away actions skipped: count is 0 or undefined`);
-    return;
-  }
-  log(
-    `[Notification] Showing away actions notification for ${actionsCount} actions`,
-  );
-
-  const message = `📣 在你离开期间，Auto-Agent-AntiGravity 处理了 ${actionsCount} 个动作。`;
-  const detail = `Agent 在你专注于其他事情时保持了自主运行。`;
-
-  vscode.window
-    .showInformationMessage(message, { detail }, "查看仪表盘")
-    .then((choice) => {
-      if (choice === "查看仪表盘") {
-        const panel = getSettingsPanel();
-        if (panel) panel.createOrShow(context.extensionUri, context);
-      }
-    });
 }
 
 async function showBackgroundModeUpsell(context) {

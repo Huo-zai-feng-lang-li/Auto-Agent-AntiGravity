@@ -1,6 +1,8 @@
 .vscode/**
 .github/**
 .agent/**
+.agents/**
+.serena/**
 .codegraph/**
 test/**
 CONTRIBUTING.md
@@ -19,4 +21,3 @@ resources/**
 node_modules/**
 !node_modules/ws/**
 !node_modules/@vscode/test-electron/**
-# Note: vsce handles node_modules automatically if you follow best practices
