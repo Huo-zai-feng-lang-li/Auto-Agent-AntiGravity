@@ -64,6 +64,9 @@ function log(message) {
     const timestamp = new Date().toISOString().split("T")[1].split(".")[0];
     const logLine = `[${timestamp}] ${message}`;
     console.log(logLine);
+    if (outputChannel) {
+      outputChannel.appendLine(logLine);
+    }
   } catch (e) {
     console.error("Logging failed:", e);
   }
@@ -187,7 +190,7 @@ async function activate(context) {
           if (!notifyEnabled) {
             log("[Event] TASK_COMPLETED ignored because notifications are disabled.");
           } else if (isFocused) {
-            log("[Event] TASK_COMPLETED ignored because the IDE is focused.");
+            log("[Event] TASK_COMPLETED ignored because IDE is currently focused in foreground.");
           } else {
             log("[Event] TASK_COMPLETED notification throttled (within 5s cooldown).");
           }

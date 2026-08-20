@@ -79,23 +79,34 @@ class TaskNotifier {
                 </Border.Background>
             </Border>
         </Border>
-        <!-- 左上角独立关闭按钮 (点击仅关闭，不切回 IDE) -->
+        <!-- 左上角极清磨砂毛玻璃关闭按钮 (矢量微光·丝滑圆角·点击仅关闭) -->
         <Border x:Name="CloseBtn"
-                Width="28" Height="28"
-                CornerRadius="14"
-                Background="#99000000"
-                BorderBrush="#66FFFFFF"
+                Width="26" Height="26"
+                CornerRadius="13"
+                BorderBrush="#40FFFFFF"
                 BorderThickness="1"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Margin="10,10,0,0"
+                Margin="12,12,0,0"
                 Cursor="Hand">
-            <TextBlock Text="✕"
-                       Foreground="#FFFFFF"
-                       FontSize="13"
-                       FontWeight="Bold"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"/>
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#B318181B" Offset="0"/>
+                    <GradientStop Color="#D909090B" Offset="1"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="10" ShadowDepth="1" Opacity="0.5"/>
+            </Border.Effect>
+            <Viewbox Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Canvas Width="20" Height="20">
+                    <Path Data="M 4,4 L 16,16 M 16,4 L 4,16"
+                          Stroke="#F4F4F5"
+                          StrokeThickness="2.2"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"/>
+                </Canvas>
+            </Viewbox>
         </Border>
     </Grid>`;
         } else {
@@ -134,21 +145,24 @@ class TaskNotifier {
                 <!-- 顶部标题栏 -->
                 <Grid Grid.Row="0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- 左上角独立关闭按钮 -->
+                        <!-- 左上角极清磨砂关闭按钮 -->
                         <Border x:Name="CloseBtn"
-                                Width="22" Height="22"
-                                CornerRadius="11"
-                                Background="#33FFFFFF"
-                                BorderBrush="#55FFFFFF"
+                                Width="20" Height="20"
+                                CornerRadius="10"
+                                Background="#25FFFFFF"
+                                BorderBrush="#35FFFFFF"
                                 BorderThickness="1"
                                 Margin="0,0,10,0"
                                 Cursor="Hand">
-                            <TextBlock Text="✕"
-                                       Foreground="#E2E8F0"
-                                       FontSize="11"
-                                       FontWeight="Bold"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
+                            <Viewbox Width="10" Height="10" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Canvas Width="20" Height="20">
+                                    <Path Data="M 4,4 L 16,16 M 16,4 L 4,16"
+                                          Stroke="#E2E8F0"
+                                          StrokeThickness="2.2"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"/>
+                                </Canvas>
+                            </Viewbox>
                         </Border>
                         
                         <!-- 彩色矢量庆祝拉花图标 -->

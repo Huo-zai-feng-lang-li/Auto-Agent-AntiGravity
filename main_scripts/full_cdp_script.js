@@ -616,12 +616,13 @@
     function isElementActive(el) {
         if (!el || !el.isConnected) return false;
         try {
-            const style = window.getComputedStyle(el);
+            const win = el.ownerDocument?.defaultView || window;
+            const style = win.getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
             if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
             return true;
         } catch (e) {
-            return false;
+            return true; // 即使在沙箱中无法获取样式，只要存在且在文档流中仍视为激活
         }
     }
 
@@ -629,7 +630,7 @@
         const text = (el.textContent || "").trim().toLowerCase();
         if (text.length === 0 || text.length > 50) return false;
         const patterns = ['accept', 'run', 'retry', 'apply', 'execute', 'confirm', 'allow once', 'allow'];
-        const rejects = ['skip', 'reject', 'cancel', 'close', 'refine'];
+        const rejects = ['skip', 'reject', 'cancel', 'close', 'refine', 'ran ', 'ran command', '已运行', 'succeeded', 'completed'];
         if (rejects.some(r => text.includes(r))) return false;
         if (!patterns.some(p => text.includes(p))) return false;
 
@@ -756,13 +757,8 @@
 
         installActionObservers();
 
-        let isWorking = false;
-        let lastWorkTime = 0;
-        let taskCompletedEmitted = true;
-        let generationStartCount = 0;
-
         function checkIsGenerating() {
-            // 1. 明确的 Chat / Agent 停止/取消生成按钮 (严格排除调试 Debug Stop)
+            // 1. 明确的 Chat / Agent 停止/取消生成/中断按钮 (递归穿透全文档与 iframe，严格排除调试 Debug Stop)
             const stopSelectors = [
                 'button[aria-label*="Stop" i]:not([aria-label*="Debug" i])',
                 'button[aria-label*="停止" i]:not([aria-label*="调试" i])',
@@ -774,7 +770,9 @@
                 'button[title*="取消" i]:not([title*="调试" i])',
                 '[role="button"][aria-label*="Stop" i]:not([aria-label*="Debug" i])',
                 '[role="button"][aria-label*="Cancel" i]:not([aria-label*="Debug" i])',
-                '.codicon-stop:not(.codicon-debug-stop)'
+                '.codicon-stop:not(.codicon-debug-stop)',
+                'button[aria-label*="Interrupt" i]',
+                'button[title*="Interrupt" i]'
             ];
 
             for (const s of stopSelectors) {
@@ -788,42 +786,89 @@
                 }
             }
 
-            // 2. 检测文本为 Cancel/Stop 的独立操作按钮 (Antigravity 右下角/输入框旁的 Cancel 按钮)
+            // 2. 文本按钮检测 (Cancel/Stop/Interrupt/终止/取消)
             const textButtons = queryAll('button, [role="button"]');
             for (const btn of textButtons) {
                 if (isElementActive(btn)) {
                     const txt = (btn.textContent || '').trim().toLowerCase();
-                    if (txt === 'cancel' || txt === 'stop' || txt === '停止' || txt === '取消') {
+                    if (txt === 'cancel' || txt === 'stop' || txt === '停止' || txt === '取消' || txt === 'interrupt' || txt === '终止') {
                         return true;
                     }
                 }
             }
 
-            // 3. 限定在 Chat/Agent 面板内部的专属生成/思考中旋转动画或状态 (杜绝全局进度条误报)
-            const chatSpinnerSelectors = [
+            // 3. MCP / Tool / Terminal / Agent 执行中专属动画与状态属性
+            const activeToolSelectors = [
                 '#antigravity\\.agentPanel .animate-spin',
                 '.antigravity-agent-side-panel .animate-spin',
                 '.interactive-session .codicon-loading',
                 '[class*="agentPanel"] .codicon-loading',
                 '[class*="chat"] .animate-spin',
-                '.animate-spin'
+                '[class*="tool"] .animate-spin',
+                '[class*="step"] .animate-spin',
+                '[class*="toolCall"] .animate-spin',
+                '[class*="tool-call"] .animate-spin',
+                '[class*="mcp"] .animate-spin',
+                '[class*="terminal"] .animate-spin',
+                '.codicon-sync.codicon-modifier-spin',
+                '.codicon-loading',
+                '.animate-spin',
+                '[data-status="running"]',
+                '[data-status="in_progress"]',
+                '[data-status="pending"]',
+                '[data-tool-status="running"]',
+                '.monaco-progress-container.active',
+                '.progress-container.active'
             ];
 
-            for (const s of chatSpinnerSelectors) {
+            for (const s of activeToolSelectors) {
                 const elements = queryAll(s);
                 for (const el of elements) {
                     if (isElementActive(el)) return true;
                 }
             }
 
+            // 4. MCP / Tool / Terminal 执行中文案特征 (如 Running command, Executing, Running test 等)
+            const statusElements = queryAll('[class*="tool"], [class*="step"], [class*="status"], [class*="badge"], [class*="terminal"], [class*="action"]');
+            for (const el of statusElements) {
+                if (isElementActive(el)) {
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    if (
+                        t.includes('running') || 
+                        t.includes('calling') || 
+                        t.includes('executing') || 
+                        t.includes('正在调用') || 
+                        t.includes('正在执行') ||
+                        t.includes('running command') ||
+                        t.includes('ran command') && isElementActive(el.querySelector('.animate-spin, .codicon-loading'))
+                    ) {
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
+
+        function hasPendingAcceptButtons() {
+            for (const s of UNIVERSAL_BTN_SELECTORS) {
+                const elements = queryAll(s);
+                for (const el of elements) {
+                    if (isAcceptButton(el)) return true;
+                }
+            }
+            return false;
+        }
+
+        let isAIGenerating = false;
+        let lastWorkTime = 0;
+        let taskCompletedEmitted = true;
 
         while (window.__autoAllState.isRunning && window.__autoAllState.sessionID === sid) {
             cycle++;
             const isBG = window.__autoAllState.isBackgroundMode;
             
-            // 1. CLICK ACTIONS
+            // 1. CLICK ACTIONS (仅自动化辅助点击，不独立作为任务完成触发源)
             let clicked = 0;
             if (actionCheckRequested && !actionCheckRunning) {
                 actionCheckRequested = false;
@@ -835,32 +880,26 @@
                 }
             }
             if (clicked > 0) {
-                log(`[Loop] Cycle ${cycle}: Clicked ${clicked} actions`);
-                isWorking = true;
+                log(`[Loop] Cycle ${cycle}: Auto-accepted ${clicked} actions`);
                 lastWorkTime = Date.now();
-                taskCompletedEmitted = false;
             }
 
-            // 2. 状态机：高精度双采样确认，模型真正生成结束后触发 2500ms 静默通知
+            // 2. 状态机：精准跟踪大模型回复生成与完整交互终态
             const generating = checkIsGenerating();
-            if (generating) {
-                generationStartCount++;
-                if (generationStartCount >= 2) {
-                    isWorking = true;
-                    lastWorkTime = Date.now();
-                    taskCompletedEmitted = false;
-                }
-            } else if (isWorking) {
-                // 保持 2500ms 静默防抖期，确保模型已彻底输出完成且无后续动作
-                if (Date.now() - lastWorkTime > 2500 && !taskCompletedEmitted) {
-                    log('[Event] AI Generation Completed! Emitting TASK_COMPLETED event in background...');
+            const hasPending = hasPendingAcceptButtons();
+
+            if (generating || hasPending) {
+                isAIGenerating = true;
+                lastWorkTime = Date.now();
+                taskCompletedEmitted = false;
+            } else if (isAIGenerating) {
+                // 仅在大模型真正回复过、所有工具完全停止、无待确认操作、且保持 3500ms 绝对静默后发送通知
+                if (!hasPending && (Date.now() - lastWorkTime > 3500) && !taskCompletedEmitted) {
+                    log('[Event] AI Final Response Completed! Emitting TASK_COMPLETED event...');
                     console.log('[AUTO_AGENT_EVENT:TASK_COMPLETED]');
                     taskCompletedEmitted = true;
-                    isWorking = false;
-                    generationStartCount = 0;
+                    isAIGenerating = false;
                 }
-            } else {
-                generationStartCount = 0;
             }
 
             // If not in background mode, we just stay on this tab and poll

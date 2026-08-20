@@ -27,8 +27,13 @@ class CDPHandler {
     }
 
     log(...args) {
-        const msg = `${LOG_PREFIX} ${args.join(' ')}`;
-        if (this.logger) this.logger(msg);
+        const msg = `[${new Date().toISOString()}] ${LOG_PREFIX} ${args.join(' ')}\n`;
+        if (this.logger) this.logger(`${LOG_PREFIX} ${args.join(' ')}`);
+        if (this.logFilePath) {
+            try {
+                fs.appendFileSync(this.logFilePath, msg, 'utf8');
+            } catch (e) { }
+        }
     }
 
     setProStatus(isPro) {

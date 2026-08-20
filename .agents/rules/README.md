@@ -48,13 +48,20 @@ graph TD
 - **进程用完即焚**：WPF 弹窗在用户点击或超时（8s）后必须调用 `$window.Close()`，确保 PowerShell 进程彻底退出，不留任何孤儿进程。
 
 ### 3.2 CDP 注入与状态机边界
-- **免打扰与全量通知权衡**：`setOnTaskCompletedCallback` 不应对 `vscode.window.state.focused` 做死板拦截；通知防抖由 5s 节流时间戳（`cooldownMs`）控制。
+- **前后台免打扰与完成通知策略**：
+  - **前台防打扰**：当 `vscode.window.state.focused === true`（用户在前台操作 IDE）时，严禁弹出任务完成桌面通知，避免干扰前台打字与浏览。
+  - **后台精准通知**：仅在 IDE 处于后台（`isFocused === false`）且大模型输出与所有 MCP/工具执行完全停机、静默保持 3500ms 后，方可派发单次通知。
+  - **历史卡片严格排除**：`isAcceptButton` 必须显式排除包含 `ran `, `ran command`, `已运行`, `succeeded`, `completed` 等已完成的历史卡片，防止历史记录被误判为待处理动作导致中间提早触发通知。
+  - **跨 Window 样式容错**：`isElementActive` 必须使用 `el.ownerDocument?.defaultView || window` 计算 computedStyle，在沙箱/iframe 报错时兜底返回 true，防止生成中状态被漏判。
 - **低资源消耗保证**：
   - 严禁在注入脚本中使用 `while(true)` 无节制空转；
   - 必须使用 `MutationObserver` 响应式捕获 DOM 变动；
   - 轮询必须配合 `Web Worker` 定时器以避免 IDE 后台切屏时被 Chromium 降频挂起。
 
-### 3.3 依赖与打包边界 (`.vscodeignore` 规范)
+### 3.3 日志与诊断通道边界
+- **多管道同步输出**：所有关键事件必须同时分发至 `console.log`、VS Code `OutputChannel` 以及磁盘文件 `auto-all-cdp.log`，严禁出现仅在单端打印导致诊断断链。
+
+### 3.4 依赖与打包边界 (`.vscodeignore` 规范)
 - **`ws` 模块必须保留**：由于 CDP 需要 WebSocket，`node_modules/ws` 及其依赖必须被打包进 VSIX。
 - **打包命令必须加 `--no-dependencies`**：防止 vsce 重新触发 `npm install --production` 篡改已修整好的 node_modules 结构。
 - **静态资源完整性**：打包前确认 `media/card_1.png` ~ `card_27.png` 均存在且通过打包白名单。
@@ -69,4 +76,4 @@ graph TD
 2. **发布与打 Tag 规范**：
    - 每次发布前递增 `package.json` 中的 `version`。
    - 确保 `vsce package` 构建出对应版本的 `.vsix` 文件。
-   - 推送 `git push origin main` 及 `git push origin v*.*.*` 触发 GitHub Actions 自动化 Release 构建。
+   - 统一使用工作流或代理推送：`git push origin main` 及 `git push origin v*.*.*` 触发 GitHub Actions 自动化 Release 构建。
