@@ -756,16 +756,44 @@
         let generationStartCount = 0;
 
         function checkIsGenerating() {
-            const stopBtn = document.querySelector('button[aria-label*="Stop" i], button[aria-label*="停止" i], [role="button"][aria-label*="Stop" i], button[title*="Stop" i], .codicon-stop, .codicon-debug-stop');
-            if (stopBtn && isElementVisible(stopBtn)) return true;
+            // 1. 明确的停止/生成中按钮（权重最高）
+            const stopSelectors = [
+                'button[aria-label*="Stop" i]',
+                'button[aria-label*="停止" i]',
+                'button[title*="Stop" i]',
+                '[role="button"][aria-label*="Stop" i]',
+                '.codicon-stop',
+                '.codicon-debug-stop'
+            ];
+            for (const s of stopSelectors) {
+                const el = document.querySelector(s);
+                if (el && isElementVisible(el)) return true;
+            }
 
-            const spinner = document.querySelector('.animate-spin, .codicon-loading, [aria-busy="true"], .monaco-progress-container.active, .progress-item.active');
-            if (spinner && isElementVisible(spinner)) return true;
+            // 2. 明确的加载/进度动画
+            const spinnerSelectors = [
+                '.animate-spin',
+                '.codicon-loading',
+                '[aria-busy="true"]',
+                '.monaco-progress-container.active'
+            ];
+            for (const s of spinnerSelectors) {
+                const el = document.querySelector(s);
+                if (el && isElementVisible(el)) return true;
+            }
 
-            const panel = document.querySelector('.antigravity-agent-side-panel') || document.querySelector('.chat-session-item') || document.querySelector('.interactive-session') || document.body;
-            if (panel) {
-                const currentLen = (panel.innerText || panel.textContent || '').length;
-                if (lastSidePanelTextLength !== 0 && currentLen > lastSidePanelTextLength) {
+            // 3. 严格限定在 Antigravity / Cursor 的 Agent 消息流面板，严禁回退到 document.body
+            const chatContainers = document.querySelectorAll(
+                '#antigravity\\.agentPanel, .antigravity-agent-side-panel, .chat-session-item, .interactive-session, .interactive-item-container, .rendered-markdown'
+            );
+            if (chatContainers.length > 0) {
+                let currentLen = 0;
+                chatContainers.forEach(c => {
+                    if (isElementVisible(c)) {
+                        currentLen += (c.innerText || c.textContent || '').length;
+                    }
+                });
+                if (lastSidePanelTextLength !== 0 && currentLen > lastSidePanelTextLength + 10) {
                     lastSidePanelTextLength = currentLen;
                     return true;
                 }
