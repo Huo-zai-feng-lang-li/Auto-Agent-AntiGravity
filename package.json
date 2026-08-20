@@ -2,7 +2,7 @@
     "name": "Auto-Agent-AntiGravity",
     "displayName": "Auto-Agent-AntiGravity",
     "description": "释放全自动 AI Agent。自动接受文件修改、终端命令及恢复提示，实现零干预开发。",
-    "version": "1.0.63",
+    "version": "1.0.66",
     "publisher": "Huo-zai-feng-lang-li",
     "icon": "media/icon.png",
     "repository": {
@@ -50,6 +50,10 @@
                 "title": "Auto-Agent-AntiGravity: 切换多标签模式"
             },
             {
+                "command": "auto-all.toggleNotification",
+                "title": "Auto-Agent-AntiGravity: 开启/关闭 任务完成通知"
+            },
+            {
                 "command": "auto-all.openSettings",
                 "title": "Auto-Agent-AntiGravity: 打开仪表盘设置"
             },
@@ -61,6 +65,11 @@
         "configuration": {
             "title": "Auto-Agent-AntiGravity",
             "properties": {
+                "auto-all.enableNotification": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "是否在 AI 思考与生成结束时发送桌面完成通知。"
+                },
                 "auto-all.bannedCommands": {
                     "type": "array",
                     "items": {

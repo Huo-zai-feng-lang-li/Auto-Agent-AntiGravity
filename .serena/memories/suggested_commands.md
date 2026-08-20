@@ -1,0 +1,1 @@
+PowerShell workspace commands: `npm test`; `npm run compile`; `node --check main_scripts/full_cdp_script.js`; `git status --short --branch`; `git diff --check`. Use `rg` for source search. Build output is `dist/extension.js`; package with `npm run package` when requested.

@@ -1,0 +1,1 @@
+Use CommonJS modules and plain JavaScript. Existing host code uses concise callbacks, optional chaining, and logger-prefixed event messages. Keep CDP state-machine changes isolated from host notification policy; host owns VS Code focus and notification settings. Preserve UTF-8 source and existing CRLF/formatting unless the touched block requires change.

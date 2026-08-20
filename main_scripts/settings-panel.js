@@ -75,6 +75,20 @@ class SettingsPanel {
             );
             this.sendStats();
             break;
+          case "setNotifyEnabled":
+            {
+              const isEnabled = Boolean(message.enabled);
+              await this.context.globalState.update(
+                "auto-all-notify-enabled",
+                isEnabled,
+              );
+              try {
+                const cfg = vscode.workspace.getConfiguration("auto-all");
+                await cfg.update("enableNotification", isEnabled, vscode.ConfigurationTarget.Global);
+              } catch (e) {}
+              this.sendStats();
+            }
+            break;
           case "testNotify":
             {
               const { TaskNotifier } = require("./taskNotifier");
@@ -176,12 +190,14 @@ class SettingsPanel {
       ? this.context.globalState.get("auto-all-frequency", 1000)
       : 300;
     const notifyStyle = this.context.globalState.get("auto-all-notify-style", "image");
+    const notifyEnabled = this.context.globalState.get("auto-all-notify-enabled", true);
 
     this.panel.webview.postMessage({
       command: "updateStats",
       stats,
       frequency,
       notifyStyle,
+      notifyEnabled,
       isPro,
     });
   }
@@ -600,24 +616,33 @@ class SettingsPanel {
 
                 <div class="glass-panel">
                     <div class="panel-header">
-                        <div class="panel-title">🎨 完成通知展示风格</div>
-                        <div class="reset-tag" id="currentStyleTag">当前：艺术图卡片</div>
-                    </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-                        <div id="cardImageStyle" class="tool-card" style="cursor: pointer; border: 2px solid #4f46e5; background: #fff;">
-                            <span class="tool-icon">🖼️</span>
-                            <strong style="font-size: 14px; margin-bottom: 4px;">精美艺术图卡片</strong>
-                            <span style="font-size: 11px; color: #64748b; text-align: center;">极简现代艺术图 · 零黑边 · 极清悬浮</span>
-                        </div>
-                        <div id="cardUiStyle" class="tool-card" style="cursor: pointer; border: 1px solid #e2e8f0;">
-                            <span class="tool-icon">🪟</span>
-                            <strong style="font-size: 14px; margin-bottom: 4px;">原生极清毛玻璃</strong>
-                            <span style="font-size: 11px; color: #64748b; text-align: center;">DirectWrite 矢量渲染 · 科技感流光条</span>
+                        <div class="panel-title">🎨 完成通知展示与管理</div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="position: relative; display: inline-block; width: 44px; height: 24px; margin: 0; cursor: pointer;">
+                                <input type="checkbox" id="notifyToggle" checked style="opacity: 0; width: 0; height: 0; position: absolute;">
+                                <span id="notifyToggleSlider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #4f46e5; transition: .3s; border-radius: 24px;"></span>
+                                <span id="notifyToggleDot" style="position: absolute; height: 18px; width: 18px; left: 23px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></span>
+                            </label>
+                            <div class="reset-tag" id="currentStyleTag">已开启 · 艺术图卡片</div>
                         </div>
                     </div>
-                    <button id="testNotifyBtn" class="btn" style="background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);">
-                        <span>📣 立即测试当前通知效果</span>
-                    </button>
+                    <div id="notifyConfigArea" style="transition: opacity 0.3s ease;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                            <div id="cardImageStyle" class="tool-card" style="cursor: pointer; border: 2px solid #4f46e5; background: #fff;">
+                                <span class="tool-icon">🖼️</span>
+                                <strong style="font-size: 14px; margin-bottom: 4px;">精美艺术图卡片</strong>
+                                <span style="font-size: 11px; color: #64748b; text-align: center;">极简现代艺术图 · 零黑边 · 极清悬浮</span>
+                            </div>
+                            <div id="cardUiStyle" class="tool-card" style="cursor: pointer; border: 1px solid #e2e8f0;">
+                                <span class="tool-icon">🪟</span>
+                                <strong style="font-size: 14px; margin-bottom: 4px;">原生极清毛玻璃</strong>
+                                <span style="font-size: 11px; color: #64748b; text-align: center;">DirectWrite 矢量渲染 · 科技感流光条</span>
+                            </div>
+                        </div>
+                        <button id="testNotifyBtn" class="btn" style="background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);">
+                            <span>📣 立即测试当前通知效果</span>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="glass-panel">
@@ -680,7 +705,34 @@ class SettingsPanel {
                     const cardUi = document.getElementById('cardUiStyle');
                     const currentStyleTag = document.getElementById('currentStyleTag');
                     const testNotifyBtn = document.getElementById('testNotifyBtn');
+                    const notifyToggle = document.getElementById('notifyToggle');
+                    const notifyToggleSlider = document.getElementById('notifyToggleSlider');
+                    const notifyToggleDot = document.getElementById('notifyToggleDot');
+                    const notifyConfigArea = document.getElementById('notifyConfigArea');
+
                     let currentStyle = 'image';
+                    let isNotifyEnabled = true;
+
+                    function renderNotifyState() {
+                        if (isNotifyEnabled) {
+                            notifyToggle.checked = true;
+                            notifyToggleSlider.style.backgroundColor = '#4f46e5';
+                            notifyToggleDot.style.left = '23px';
+                            notifyConfigArea.style.opacity = '1';
+                            notifyConfigArea.style.pointerEvents = 'auto';
+                            currentStyleTag.innerText = '已开启 · ' + (currentStyle === 'ui' ? '原生毛玻璃' : '艺术图卡片');
+                            currentStyleTag.style.color = '#4f46e5';
+                            testNotifyBtn.innerHTML = '<span>📣 立即测试当前通知效果</span>';
+                        } else {
+                            notifyToggle.checked = false;
+                            notifyToggleSlider.style.backgroundColor = '#cbd5e1';
+                            notifyToggleDot.style.left = '3px';
+                            notifyConfigArea.style.opacity = '0.45';
+                            notifyConfigArea.style.pointerEvents = 'none';
+                            currentStyleTag.innerText = '已关闭通知';
+                            currentStyleTag.style.color = '#94a3b8';
+                        }
+                    }
 
                     function applyStyleUI(style) {
                         currentStyle = style;
@@ -689,15 +741,20 @@ class SettingsPanel {
                             cardUi.style.background = '#fff';
                             cardImage.style.border = '1px solid #e2e8f0';
                             cardImage.style.background = 'linear-gradient(135deg, #fff 0%, #f1f5f9 100%)';
-                            currentStyleTag.innerText = '当前：原生毛玻璃';
                         } else {
                             cardImage.style.border = '2px solid #4f46e5';
                             cardImage.style.background = '#fff';
                             cardUi.style.border = '1px solid #e2e8f0';
                             cardUi.style.background = 'linear-gradient(135deg, #fff 0%, #f1f5f9 100%)';
-                            currentStyleTag.innerText = '当前：艺术图卡片';
                         }
+                        renderNotifyState();
                     }
+
+                    notifyToggle.addEventListener('change', (e) => {
+                        isNotifyEnabled = e.target.checked;
+                        renderNotifyState();
+                        vscode.postMessage({ command: 'setNotifyEnabled', enabled: isNotifyEnabled });
+                    });
 
                     cardImage.addEventListener('click', () => {
                         applyStyleUI('image');
@@ -721,8 +778,14 @@ class SettingsPanel {
                                 slider.value = val;
                                 valDisplay.innerText = (val/1000).toFixed(1) + 's / 频率';
                             }
+                            if (message.notifyEnabled !== undefined) {
+                                isNotifyEnabled = Boolean(message.notifyEnabled);
+                            }
                             if (message.notifyStyle) {
+                                currentStyle = message.notifyStyle;
                                 applyStyleUI(message.notifyStyle);
+                            } else {
+                                renderNotifyState();
                             }
                         }
                         if (message.command === 'updateROIStats') {

@@ -2,6 +2,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { CDPHandler } = require('../main_scripts/cdp-handler');
+const {
+  shouldNotifyTaskCompletion,
+} = require('../main_scripts/notification-policy');
 
 const root = path.resolve(__dirname, '..');
 
@@ -39,6 +42,38 @@ async function testHostPollingIsSingleFlight() {
   assert.doesNotMatch(source, /pollTimer = setInterval\(async/);
   assert.match(source, /setTimeout\(poll, delay\)/);
   assert.match(source, /getConnectionCount\(\) > 0 \? 30000 : 5000/);
+}
+
+async function testTaskCompletionNotificationPolicy() {
+  const base = {
+    notifyEnabled: true,
+    isFocused: false,
+    now: 10_000,
+    lastNotifiedAt: 0,
+    cooldownMs: 5_000,
+  };
+
+  assert.equal(shouldNotifyTaskCompletion(base), true);
+  assert.equal(
+    shouldNotifyTaskCompletion({ ...base, notifyEnabled: false }),
+    false,
+  );
+  assert.equal(
+    shouldNotifyTaskCompletion({ ...base, isFocused: true }),
+    false,
+  );
+  assert.equal(
+    shouldNotifyTaskCompletion({ ...base, lastNotifiedAt: 7_000 }),
+    false,
+  );
+}
+
+async function testTaskCompletionCallbackUsesLiveFocusState() {
+  const source = read('extension.js');
+  assert.match(
+    source,
+    /const isFocused = vscode\.window\.state\.focused[\s\S]*?shouldNotifyTaskCompletion\([\s\S]*?\bisFocused,\s*now/,
+  );
 }
 
 async function testConfiguredEnvironmentDoesNotAutoRelaunch() {
@@ -127,6 +162,8 @@ async function main() {
   await testEventDrivenRendererLoop();
   await testPendingCommandsAreRejectedOnDisconnect();
   await testHostPollingIsSingleFlight();
+  await testTaskCompletionNotificationPolicy();
+  await testTaskCompletionCallbackUsesLiveFocusState();
   await testConfiguredEnvironmentDoesNotAutoRelaunch();
   console.log('Auto-Agent performance regression tests passed');
 }

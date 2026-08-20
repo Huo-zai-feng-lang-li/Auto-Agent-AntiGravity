@@ -1,0 +1,1 @@
+Windows VS Code extension. JavaScript source bundled with esbuild; package scripts use npm. Runtime dependencies include vscode external and ws/CDP support. Tests are Node-based integration script at `test/integration-test.js`; no Jest/Vitest config present.

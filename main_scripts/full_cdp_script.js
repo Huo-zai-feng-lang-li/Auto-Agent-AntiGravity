@@ -613,6 +613,18 @@
         return false;
     }
 
+    function isElementActive(el) {
+        if (!el || !el.isConnected) return false;
+        try {
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function isAcceptButton(el) {
         const text = (el.textContent || "").trim().toLowerCase();
         if (text.length === 0 || text.length > 50) return false;
@@ -631,23 +643,18 @@
             }
         }
 
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== 'none' && rect.width > 0 && style.pointerEvents !== 'none' && !el.disabled;
+        return isElementActive(el);
     }
 
     function isElementVisible(el) {
-        if (!el || !el.isConnected) return false;
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        return style.display !== 'none' && rect.width > 0 && style.visibility !== 'hidden';
+        return isElementActive(el);
     }
 
     function waitForDisappear(el, timeout = 500) {
         return new Promise(resolve => {
             const startTime = Date.now();
             const check = () => {
-                if (!isElementVisible(el)) {
+                if (!isElementActive(el)) {
                     resolve(true);
                 } else if (Date.now() - startTime >= timeout) {
                     resolve(false);
@@ -752,52 +759,61 @@
         let isWorking = false;
         let lastWorkTime = 0;
         let taskCompletedEmitted = true;
-        let lastSidePanelTextLength = 0;
         let generationStartCount = 0;
 
         function checkIsGenerating() {
-            // 1. 明确的停止/生成中按钮（权重最高）
+            // 1. 明确的 Chat / Agent 停止/取消生成按钮 (严格排除调试 Debug Stop)
             const stopSelectors = [
-                'button[aria-label*="Stop" i]',
-                'button[aria-label*="停止" i]',
-                'button[title*="Stop" i]',
-                '[role="button"][aria-label*="Stop" i]',
-                '.codicon-stop',
-                '.codicon-debug-stop'
+                'button[aria-label*="Stop" i]:not([aria-label*="Debug" i])',
+                'button[aria-label*="停止" i]:not([aria-label*="调试" i])',
+                'button[aria-label*="Cancel" i]:not([aria-label*="Debug" i])',
+                'button[aria-label*="取消" i]:not([aria-label*="调试" i])',
+                'button[title*="Stop" i]:not([title*="Debug" i])',
+                'button[title*="停止" i]:not([title*="调试" i])',
+                'button[title*="Cancel" i]:not([title*="Debug" i])',
+                'button[title*="取消" i]:not([title*="调试" i])',
+                '[role="button"][aria-label*="Stop" i]:not([aria-label*="Debug" i])',
+                '[role="button"][aria-label*="Cancel" i]:not([aria-label*="Debug" i])',
+                '.codicon-stop:not(.codicon-debug-stop)'
             ];
+
             for (const s of stopSelectors) {
-                const el = document.querySelector(s);
-                if (el && isElementVisible(el)) return true;
-            }
-
-            // 2. 明确的加载/进度动画
-            const spinnerSelectors = [
-                '.animate-spin',
-                '.codicon-loading',
-                '[aria-busy="true"]',
-                '.monaco-progress-container.active'
-            ];
-            for (const s of spinnerSelectors) {
-                const el = document.querySelector(s);
-                if (el && isElementVisible(el)) return true;
-            }
-
-            // 3. 严格限定在 Antigravity / Cursor 的 Agent 消息流面板，严禁回退到 document.body
-            const chatContainers = document.querySelectorAll(
-                '#antigravity\\.agentPanel, .antigravity-agent-side-panel, .chat-session-item, .interactive-session, .interactive-item-container, .rendered-markdown'
-            );
-            if (chatContainers.length > 0) {
-                let currentLen = 0;
-                chatContainers.forEach(c => {
-                    if (isElementVisible(c)) {
-                        currentLen += (c.innerText || c.textContent || '').length;
+                const elements = queryAll(s);
+                for (const el of elements) {
+                    if (isElementActive(el)) {
+                        const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase();
+                        if (label.includes('debug') || label.includes('调试')) continue;
+                        return true;
                     }
-                });
-                if (lastSidePanelTextLength !== 0 && currentLen > lastSidePanelTextLength + 10) {
-                    lastSidePanelTextLength = currentLen;
-                    return true;
                 }
-                lastSidePanelTextLength = currentLen;
+            }
+
+            // 2. 检测文本为 Cancel/Stop 的独立操作按钮 (Antigravity 右下角/输入框旁的 Cancel 按钮)
+            const textButtons = queryAll('button, [role="button"]');
+            for (const btn of textButtons) {
+                if (isElementActive(btn)) {
+                    const txt = (btn.textContent || '').trim().toLowerCase();
+                    if (txt === 'cancel' || txt === 'stop' || txt === '停止' || txt === '取消') {
+                        return true;
+                    }
+                }
+            }
+
+            // 3. 限定在 Chat/Agent 面板内部的专属生成/思考中旋转动画或状态 (杜绝全局进度条误报)
+            const chatSpinnerSelectors = [
+                '#antigravity\\.agentPanel .animate-spin',
+                '.antigravity-agent-side-panel .animate-spin',
+                '.interactive-session .codicon-loading',
+                '[class*="agentPanel"] .codicon-loading',
+                '[class*="chat"] .animate-spin',
+                '.animate-spin'
+            ];
+
+            for (const s of chatSpinnerSelectors) {
+                const elements = queryAll(s);
+                for (const el of elements) {
+                    if (isElementActive(el)) return true;
+                }
             }
 
             return false;
@@ -825,7 +841,7 @@
                 taskCompletedEmitted = false;
             }
 
-            // 2. 状态机：仅在模型真实执行生成且生成结束后触发一次通知
+            // 2. 状态机：高精度双采样确认，模型真正生成结束后触发 2500ms 静默通知
             const generating = checkIsGenerating();
             if (generating) {
                 generationStartCount++;
@@ -835,8 +851,9 @@
                     taskCompletedEmitted = false;
                 }
             } else if (isWorking) {
-                if (Date.now() - lastWorkTime > 3000 && !taskCompletedEmitted) {
-                    log('[Event] AI Generation Completed! Emitting TASK_COMPLETED event...');
+                // 保持 2500ms 静默防抖期，确保模型已彻底输出完成且无后续动作
+                if (Date.now() - lastWorkTime > 2500 && !taskCompletedEmitted) {
+                    log('[Event] AI Generation Completed! Emitting TASK_COMPLETED event in background...');
                     console.log('[AUTO_AGENT_EVENT:TASK_COMPLETED]');
                     taskCompletedEmitted = true;
                     isWorking = false;

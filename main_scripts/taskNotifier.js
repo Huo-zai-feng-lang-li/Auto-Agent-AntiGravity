@@ -63,22 +63,41 @@ class TaskNotifier {
             winH = 206;
             winW = 396;
             xamlBody = `
-    <Border CornerRadius="16" 
-            Cursor="Hand"
-            Margin="8"
-            BorderThickness="0"
-            Background="Transparent">
-        <Border.Effect>
-            <DropShadowEffect Color="#38BDF8" BlurRadius="24" ShadowDepth="0" Opacity="0.45"/>
-        </Border.Effect>
+    <Grid Margin="8">
         <Border CornerRadius="16" 
-                BorderBrush="#3338BDF8" 
-                BorderThickness="1">
-            <Border.Background>
-                <ImageBrush ImageSource="${targetImagePath}" Stretch="UniformToFill"/>
-            </Border.Background>
+                Cursor="Hand"
+                BorderThickness="0"
+                Background="Transparent">
+            <Border.Effect>
+                <DropShadowEffect Color="#38BDF8" BlurRadius="24" ShadowDepth="0" Opacity="0.45"/>
+            </Border.Effect>
+            <Border CornerRadius="16" 
+                    BorderBrush="#3338BDF8" 
+                    BorderThickness="1">
+                <Border.Background>
+                    <ImageBrush ImageSource="${targetImagePath}" Stretch="UniformToFill"/>
+                </Border.Background>
+            </Border>
         </Border>
-    </Border>`;
+        <!-- 左上角独立关闭按钮 (点击仅关闭，不切回 IDE) -->
+        <Border x:Name="CloseBtn"
+                Width="28" Height="28"
+                CornerRadius="14"
+                Background="#99000000"
+                BorderBrush="#66FFFFFF"
+                BorderThickness="1"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="10,10,0,0"
+                Cursor="Hand">
+            <TextBlock Text="✕"
+                       Foreground="#FFFFFF"
+                       FontSize="13"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+        </Border>
+    </Grid>`;
         } else {
             // 模式 2：原生极清暗黑毛玻璃 UI 弹框（彩色高保真矢量拉花 + 科技流光条）
             winH = 110;
@@ -106,7 +125,7 @@ class TaskNotifier {
                 </Border.Background>
             </Border>
             
-            <Grid Margin="20,12,18,12">
+            <Grid Margin="16,12,16,12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -115,7 +134,24 @@ class TaskNotifier {
                 <!-- 顶部标题栏 -->
                 <Grid Grid.Row="0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- 彩色矢量庆祝拉花图标 (解决 Windows WPF 默认单色 Emoji 变黑的问题) -->
+                        <!-- 左上角独立关闭按钮 -->
+                        <Border x:Name="CloseBtn"
+                                Width="22" Height="22"
+                                CornerRadius="11"
+                                Background="#33FFFFFF"
+                                BorderBrush="#55FFFFFF"
+                                BorderThickness="1"
+                                Margin="0,0,10,0"
+                                Cursor="Hand">
+                            <TextBlock Text="✕"
+                                       Foreground="#E2E8F0"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Border>
+                        
+                        <!-- 彩色矢量庆祝拉花图标 -->
                         <Viewbox Width="18" Height="18" Margin="0,0,8,0" VerticalAlignment="Center">
                             <Canvas Width="24" Height="24">
                                 <!-- 锥筒筒身：金色渐变 -->
@@ -147,17 +183,17 @@ class TaskNotifier {
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                     
-                    <Border Background="#16FFFFFF" 
-                            CornerRadius="4" 
-                            Padding="6,2" 
-                            HorizontalAlignment="Right" 
-                            VerticalAlignment="Center">
-                        <TextBlock Text="Antigravity" 
-                                   FontFamily="Segoe UI" 
-                                   FontSize="10" 
-                                   FontWeight="Medium" 
-                                   Foreground="#9CA3AF"/>
-                    </Border>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Border Background="#16FFFFFF" 
+                                CornerRadius="4" 
+                                Padding="6,2">
+                            <TextBlock Text="Antigravity" 
+                                       FontFamily="Segoe UI" 
+                                       FontSize="10" 
+                                       FontWeight="Medium" 
+                                       Foreground="#9CA3AF"/>
+                        </Border>
+                    </StackPanel>
                 </Grid>
                 
                 <!-- 消息内容与引导按钮 -->
@@ -249,6 +285,15 @@ $workArea = [System.Windows.SystemParameters]::WorkArea
 $window.Left = $workArea.Right - $window.Width - 16
 $window.Top = $workArea.Bottom - $window.Height - 16
 
+$closeBtn = $window.FindName("CloseBtn")
+if ($closeBtn) {
+    $closeBtn.Add_MouseLeftButtonDown({
+        param($sender, $e)
+        $e.Handled = $true
+        $window.Close()
+    })
+}
+
 $action = {
     $processes = Get-Process -Name "Antigravity", "Cursor", "Code" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }
     if ($processes) {
@@ -262,6 +307,9 @@ $action = {
 }
 
 $window.Add_MouseLeftButtonDown($action)
+$window.Add_MouseRightButtonDown({
+    $window.Close()
+})
 
 # 8 秒无操作自动淡出关闭
 $timer = New-Object System.Windows.Threading.DispatcherTimer

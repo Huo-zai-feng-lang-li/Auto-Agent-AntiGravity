@@ -1,0 +1,1 @@
+For fixes: run focused regression test or `npm test`, `node --check` on changed injected scripts, `npm run compile`, and `git diff --check`. If WPF notifier code changes, run its local smoke check per `.agents/rules/README.md`; this fix should not touch WPF code.

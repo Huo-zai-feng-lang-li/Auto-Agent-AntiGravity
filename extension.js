@@ -10,6 +10,9 @@ const {
   getCDPStartupMode,
   waitForCDP,
 } = require("./main_scripts/cdp-startup-policy");
+const {
+  shouldNotifyTaskCompletion,
+} = require("./main_scripts/notification-policy");
 
 function getSettingsPanel() {
   return SettingsPanel;
@@ -162,12 +165,32 @@ async function activate(context) {
         cdpHandler.setProStatus(isPro);
       }
 
-      // 注册任务完成事件：当 AI 模型回答完成时，发送全局置顶通知
+      // 仅在 AI 模型回答完成且 IDE 失焦时发送全局置顶通知
       let lastCompletedNotifyTime = 0;
       cdpHandler.setOnTaskCompletedCallback(() => {
+        const config = vscode.workspace.getConfiguration("auto-all");
+        const notifyEnabled = globalContext.globalState.get(
+          "auto-all-notify-enabled",
+          config.get("enableNotification", true)
+        );
         const now = Date.now();
-        if (now - lastCompletedNotifyTime < 5000) {
-          log("[Event] TASK_COMPLETED notification throttled (within 5s cooldown).");
+        const isFocused = vscode.window.state.focused;
+        const shouldNotify = shouldNotifyTaskCompletion({
+          notifyEnabled,
+          isFocused,
+          now,
+          lastNotifiedAt: lastCompletedNotifyTime,
+          cooldownMs: 5000,
+        });
+
+        if (!shouldNotify) {
+          if (!notifyEnabled) {
+            log("[Event] TASK_COMPLETED ignored because notifications are disabled.");
+          } else if (isFocused) {
+            log("[Event] TASK_COMPLETED ignored because the IDE is focused.");
+          } else {
+            log("[Event] TASK_COMPLETED notification throttled (within 5s cooldown).");
+          }
           return;
         }
         lastCompletedNotifyTime = now;
@@ -212,6 +235,21 @@ async function activate(context) {
       vscode.commands.registerCommand("auto-all.relaunch", () =>
         handleRelaunch(),
       ),
+      vscode.commands.registerCommand("auto-all.toggleNotification", async () => {
+        const config = vscode.workspace.getConfiguration("auto-all");
+        const current = context.globalState.get(
+          "auto-all-notify-enabled",
+          config.get("enableNotification", true)
+        );
+        const nextState = !current;
+        await context.globalState.update("auto-all-notify-enabled", nextState);
+        try {
+          await config.update("enableNotification", nextState, vscode.ConfigurationTarget.Global);
+        } catch (e) {}
+        vscode.window.showInformationMessage(
+          `Auto-Agent-AntiGravity: 任务完成桌面通知已 ${nextState ? "开启 🔔" : "关闭 🔕"}`
+        );
+      }),
       vscode.commands.registerCommand("auto-all.updateFrequency", (freq) =>
         handleFrequencyUpdate(context, freq),
       ),
