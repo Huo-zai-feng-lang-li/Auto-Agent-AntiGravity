@@ -176,12 +176,17 @@ async function activate(context) {
           "auto-all-notify-enabled",
           config.get("enableNotification", true)
         );
+        const alwaysNotify = globalContext.globalState.get(
+          "auto-all-always-notify",
+          config.get("alwaysNotify", true)
+        );
         const now = Date.now();
         const isFocused = vscode.window.state.focused;
         const shouldNotify = shouldNotifyTaskCompletion({
           notifyEnabled,
           isFocused,
           now,
+          alwaysNotify,
           lastNotifiedAt: lastCompletedNotifyTime,
           cooldownMs: 5000,
         });

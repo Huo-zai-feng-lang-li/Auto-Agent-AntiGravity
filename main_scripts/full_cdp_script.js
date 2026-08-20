@@ -243,40 +243,73 @@
         });
     }
 
-    let cachedDocuments = null;
-    let cachedDocsTimestamp = 0;
-    const DOCS_CACHE_DURATION = 1500;
+    let cachedSearchRoots = null;
+    let cachedRootsTimestamp = 0;
+    const ROOTS_CACHE_DURATION = 2000;
 
-    const getDocuments = (root = document, forceRefresh = false) => {
+    const getSearchRoots = (forceRefresh = false) => {
         const now = Date.now();
-        if (root === document && !forceRefresh && cachedDocuments && (now - cachedDocsTimestamp < DOCS_CACHE_DURATION)) {
-            return cachedDocuments;
+        if (!forceRefresh && cachedSearchRoots && (now - cachedRootsTimestamp < ROOTS_CACHE_DURATION)) {
+            return cachedSearchRoots;
         }
 
-        let docs = [root];
-        try {
-            const iframes = root.querySelectorAll('iframe, frame');
-            for (const iframe of iframes) {
-                try {
-                    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-                    if (iframeDoc) docs.push(...getDocuments(iframeDoc, true));
-                } catch (e) { }
-            }
-        } catch (e) { }
+        const roots = [document];
+        const visited = new Set(roots);
 
-        if (root === document) {
-            cachedDocuments = docs;
-            cachedDocsTimestamp = now;
-        }
-        return docs;
+        const collectRoots = (node) => {
+            if (!node || !node.querySelectorAll) return;
+            try {
+                const frames = node.querySelectorAll('iframe, frame');
+                for (let i = 0; i < frames.length; i++) {
+                    try {
+                        const fDoc = frames[i].contentDocument || frames[i].contentWindow?.document;
+                        if (fDoc && !visited.has(fDoc)) {
+                            visited.add(fDoc);
+                            roots.push(fDoc);
+                            collectRoots(fDoc);
+                        }
+                    } catch (e) { }
+                }
+                const shadowHosts = node.querySelectorAll('.antigravity-agent-side-panel, [class*="agentPanel"], #react-app, #chat');
+                for (let i = 0; i < shadowHosts.length; i++) {
+                    const sr = shadowHosts[i].shadowRoot;
+                    if (sr && !visited.has(sr)) {
+                        visited.add(sr);
+                        roots.push(sr);
+                    }
+                }
+            } catch (e) { }
+        };
+
+        collectRoots(document);
+        cachedSearchRoots = roots;
+        cachedRootsTimestamp = now;
+        return roots;
     };
 
     const queryAll = (selector) => {
         const results = [];
-        getDocuments().forEach(doc => {
-            try { results.push(...Array.from(doc.querySelectorAll(selector))); } catch (e) { }
-        });
+        const roots = getSearchRoots();
+        for (let i = 0; i < roots.length; i++) {
+            try {
+                const els = roots[i].querySelectorAll(selector);
+                for (let j = 0; j < els.length; j++) results.push(els[j]);
+            } catch (e) { }
+        }
         return results;
+    };
+
+    const findFirst = (selector, predicate = isElementActive) => {
+        const roots = getSearchRoots();
+        for (let i = 0; i < roots.length; i++) {
+            try {
+                const els = roots[i].querySelectorAll(selector);
+                for (let j = 0; j < els.length; j++) {
+                    if (predicate(els[j])) return els[j];
+                }
+            } catch (e) { }
+        }
+        return null;
     };
 
     const stripTimeSuffix = (text) => {
@@ -757,97 +790,29 @@
 
         installActionObservers();
 
-        function checkIsGenerating() {
-            // 1. 明确的 Chat / Agent 停止/取消生成/中断按钮 (递归穿透全文档与 iframe，严格排除调试 Debug Stop)
-            const stopSelectors = [
-                'button[aria-label*="Stop" i]:not([aria-label*="Debug" i])',
-                'button[aria-label*="停止" i]:not([aria-label*="调试" i])',
-                'button[aria-label*="Cancel" i]:not([aria-label*="Debug" i])',
-                'button[aria-label*="取消" i]:not([aria-label*="调试" i])',
-                'button[title*="Stop" i]:not([title*="Debug" i])',
-                'button[title*="停止" i]:not([title*="调试" i])',
-                'button[title*="Cancel" i]:not([title*="Debug" i])',
-                'button[title*="取消" i]:not([title*="调试" i])',
-                '[role="button"][aria-label*="Stop" i]:not([aria-label*="Debug" i])',
-                '[role="button"][aria-label*="Cancel" i]:not([aria-label*="Debug" i])',
-                '.codicon-stop:not(.codicon-debug-stop)',
-                'button[aria-label*="Interrupt" i]',
-                'button[title*="Interrupt" i]'
-            ];
+        function isWorking() {
+            // 1. 运行态硬指标：存在 Antigravity 专用的 cancel-tooltip 或红色方形取消按钮 (.bg-red-500)
+            const cancelBtn = findFirst(
+                '[data-tooltip-id*="cancel"], .bg-red-500, button[aria-label*="Stop" i], button[title*="Stop" i], button[aria-label*="停止" i], button[title*="停止" i], button[aria-label*="Interrupt" i]'
+            );
+            if (cancelBtn) return true;
 
-            for (const s of stopSelectors) {
-                const elements = queryAll(s);
-                for (const el of elements) {
-                    if (isElementActive(el)) {
-                        const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase();
-                        if (label.includes('debug') || label.includes('调试')) continue;
-                        return true;
-                    }
-                }
-            }
+            // 2. 运行态动画：旋转加载中
+            const spinner = findFirst('.animate-spin, .codicon-loading, [data-status="running"], [data-status="in_progress"], .progress-container.active');
+            if (spinner) return true;
 
-            // 2. 文本按钮检测 (Cancel/Stop/Interrupt/终止/取消)
-            const textButtons = queryAll('button, [role="button"]');
-            for (const btn of textButtons) {
-                if (isElementActive(btn)) {
-                    const txt = (btn.textContent || '').trim().toLowerCase();
-                    if (txt === 'cancel' || txt === 'stop' || txt === '停止' || txt === '取消' || txt === 'interrupt' || txt === '终止') {
-                        return true;
-                    }
-                }
-            }
-
-            // 3. MCP / Tool / Terminal / Agent 执行中专属动画与状态属性
-            const activeToolSelectors = [
-                '#antigravity\\.agentPanel .animate-spin',
-                '.antigravity-agent-side-panel .animate-spin',
-                '.interactive-session .codicon-loading',
-                '[class*="agentPanel"] .codicon-loading',
-                '[class*="chat"] .animate-spin',
-                '[class*="tool"] .animate-spin',
-                '[class*="step"] .animate-spin',
-                '[class*="toolCall"] .animate-spin',
-                '[class*="tool-call"] .animate-spin',
-                '[class*="mcp"] .animate-spin',
-                '[class*="terminal"] .animate-spin',
-                '.codicon-sync.codicon-modifier-spin',
-                '.codicon-loading',
-                '.animate-spin',
-                '[data-status="running"]',
-                '[data-status="in_progress"]',
-                '[data-status="pending"]',
-                '[data-tool-status="running"]',
-                '.monaco-progress-container.active',
-                '.progress-container.active'
-            ];
-
-            for (const s of activeToolSelectors) {
-                const elements = queryAll(s);
-                for (const el of elements) {
-                    if (isElementActive(el)) return true;
-                }
-            }
-
-            // 4. MCP / Tool / Terminal 执行中文案特征 (如 Running command, Executing, Running test 等)
-            const statusElements = queryAll('[class*="tool"], [class*="step"], [class*="status"], [class*="badge"], [class*="terminal"], [class*="action"]');
-            for (const el of statusElements) {
-                if (isElementActive(el)) {
-                    const t = (el.textContent || '').trim().toLowerCase();
-                    if (
-                        t.includes('running') || 
-                        t.includes('calling') || 
-                        t.includes('executing') || 
-                        t.includes('正在调用') || 
-                        t.includes('正在执行') ||
-                        t.includes('running command') ||
-                        t.includes('ran command') && isElementActive(el.querySelector('.animate-spin, .codicon-loading'))
-                    ) {
-                        return true;
-                    }
-                }
-            }
+            // 3. 待确认操作：界面有待自动点击的按钮
+            if (hasPendingAcceptButtons()) return true;
 
             return false;
+        }
+
+        function hasDoneIndicator() {
+            // 正向完成态硬指标：Cancel 红块彻底销毁，且存在 Copy 图标或输入就绪
+            const isCancelling = findFirst('[data-tooltip-id*="cancel"], .bg-red-500');
+            if (isCancelling) return false;
+
+            return !!findFirst('.lucide-copy, svg.lucide-copy, [data-tooltip-id*="submit"], button[aria-label*="Send" i]');
         }
 
         function hasPendingAcceptButtons() {
@@ -860,15 +825,13 @@
             return false;
         }
 
-        let isAIGenerating = false;
-        let lastWorkTime = 0;
-        let taskCompletedEmitted = true;
+        let wasWorking = false;
 
         while (window.__autoAllState.isRunning && window.__autoAllState.sessionID === sid) {
             cycle++;
             const isBG = window.__autoAllState.isBackgroundMode;
             
-            // 1. CLICK ACTIONS (仅自动化辅助点击，不独立作为任务完成触发源)
+            // 1. CLICK ACTIONS (自动化辅助点击)
             let clicked = 0;
             if (actionCheckRequested && !actionCheckRunning) {
                 actionCheckRequested = false;
@@ -881,24 +844,19 @@
             }
             if (clicked > 0) {
                 log(`[Loop] Cycle ${cycle}: Auto-accepted ${clicked} actions`);
-                lastWorkTime = Date.now();
             }
 
-            // 2. 状态机：精准跟踪大模型回复生成与完整交互终态
-            const generating = checkIsGenerating();
-            const hasPending = hasPendingAcceptButtons();
+            // 2. 状态机：边沿触发（从 Working 状态转移到 Done 状态时，精确触发单次通知）
+            const currentlyWorking = isWorking();
 
-            if (generating || hasPending) {
-                isAIGenerating = true;
-                lastWorkTime = Date.now();
-                taskCompletedEmitted = false;
-            } else if (isAIGenerating) {
-                // 仅在大模型真正回复过、所有工具完全停止、无待确认操作、且保持 3500ms 绝对静默后发送通知
-                if (!hasPending && (Date.now() - lastWorkTime > 3500) && !taskCompletedEmitted) {
-                    log('[Event] AI Final Response Completed! Emitting TASK_COMPLETED event...');
+            if (currentlyWorking) {
+                wasWorking = true;
+            } else if (wasWorking) {
+                // 刚跑完生成，且检测到正向完成标识（Copy 图标或发送就绪）
+                if (hasDoneIndicator()) {
+                    log('[Event] AI Final Response Completed (Positive Indicator Detected)! Emitting TASK_COMPLETED...');
                     console.log('[AUTO_AGENT_EVENT:TASK_COMPLETED]');
-                    taskCompletedEmitted = true;
-                    isAIGenerating = false;
+                    wasWorking = false;
                 }
             }
 
@@ -1009,22 +967,14 @@
 
             const state = window.__autoAllState;
 
-            if (state.isRunning && state.currentMode === ide && state.isBackgroundMode === isBG) {
-                log(`Already running with same config, skipping`);
-                return;
-            }
-
-            if (state.isRunning) {
-                log(`Stopping previous session...`);
-                state.isRunning = false;
-            }
+            // 递增 sessionID 优雅使旧循环退出
+            state.sessionID = (state.sessionID || 0) + 1;
+            const sid = state.sessionID;
 
             state.isRunning = true;
             state.currentMode = ide;
             state.isPro = isPro;
             state.isBackgroundMode = isBG;
-            state.sessionID++;
-            const sid = state.sessionID;
             state.pollInterval = config.pollInterval || 1000;
 
             if (!state.stats.sessionStartTime) {
@@ -1032,10 +982,8 @@
             }
 
             log(`Agent Loaded (IDE: ${ide}, Multi-Tab: ${isBG}, isPro: ${isPro})`, true);
-
-            // Start the unified smart loop for all IDEs
             unifiedLoop(sid);
-
+            return "started";
         } catch (e) {
             log(`ERROR in __autoAllStart: ${e.message}`);
             console.error('[autoAll] Start error:', e);

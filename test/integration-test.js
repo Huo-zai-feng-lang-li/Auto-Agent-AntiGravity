@@ -59,8 +59,12 @@ async function testTaskCompletionNotificationPolicy() {
     false,
   );
   assert.equal(
-    shouldNotifyTaskCompletion({ ...base, isFocused: true }),
+    shouldNotifyTaskCompletion({ ...base, isFocused: true, alwaysNotify: false }),
     false,
+  );
+  assert.equal(
+    shouldNotifyTaskCompletion({ ...base, isFocused: true, alwaysNotify: true }),
+    true,
   );
   assert.equal(
     shouldNotifyTaskCompletion({ ...base, lastNotifiedAt: 7_000 }),

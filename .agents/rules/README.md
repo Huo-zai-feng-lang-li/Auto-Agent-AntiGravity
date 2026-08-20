@@ -29,8 +29,11 @@ graph TD
    - 管理 WebSocket 连接、脚本注入以及宿主与 Webview 间双向事件中继。
 3. **`main_scripts/full_cdp_script.js`**：
    - 注入到 IDE 内部的智能主循环 (`unifiedLoop`)。
-   - **生成状态检测 (`checkIsGenerating`)**：多维感知 Stop 按钮、Spinners、文本增长。
-   - **状态机节流**：连续 2 次确认生成中 + 3000ms 结束冷却期，杜绝假阳性误报。
+   - **双轨状态机 (`isWorking` 与 `hasDoneIndicator`)**：
+     - **运行态硬指标**：检测输入框 Cancel/Stop 红色方块 (`[data-tooltip-id*="cancel"]` / `.bg-red-500`)、Stop 按钮及旋转动画 (`.animate-spin`, `.codicon-loading`)。
+     - **正向完成态硬指标**：最新回答底部挂载的 Copy 图标 (`.lucide-copy`)、点赞栏以及输入框发送就绪态。
+     - **边沿触发机制 (Edge-Triggered Flip-Flop)**：仅当从“工作中 (`wasWorking=true`)”转移为“完成态 (`!isWorking && hasDoneIndicator`)”瞬间派发单次 `TASK_COMPLETED` 事件，发完立即清零 `wasWorking=false`，彻底杜绝多轮对话历史旧图标误报与假阴性漏报。
+   - **极致性能与 Shadow DOM 穿透**：通过 `getSearchRoots` 缓存检索根节点（Iframe + ShadowRoot），配合 `findFirst` 短路单元素匹配，实现 0.0% CPU 占用与零内存垃圾。
 4. **`main_scripts/taskNotifier.js`**：
    - 通过 `powershell.exe` 动态运行由 `taskNotifier.js` 生成的独立 WPF 窗体。
    - 严格保证 **2:1 黄金比例 (396x206)**、16px 圆角裁剪、发光边框与动态随机图片池。

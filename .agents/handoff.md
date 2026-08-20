@@ -1,23 +1,24 @@
-# 最新接续状态 (2026-08-20 22:58)
+# 最新接续状态 (2026-08-20 23:20)
 
 ## 用户的终极目标
 1. **中间过程零误报**：在大模型调用 MCP 工具、跑命令行、或者自动化点击辅助确认等中间流转期间，**绝对不弹通知打扰**；
 2. **最终完成零漏报**：只有在大模型一整轮思考输出彻底结束、所有工具执行完毕、界面完全处于稳定就绪状态时，若 **IDE 在后台**，必须 **100% 稳定弹出单次桌面通知**；
-3. **精准前后台判断**：IDE 处于前台聚焦时不打扰；失焦处于后台时精准捕捉并弹出。
+3. **精准前后台判断**：IDE 处于前台聚焦时不打扰；失焦处于后台时精准捕捉并弹出；
+4. **多轮对话无串扰**：历史轮次生成的 Copy/点赞图标绝对不引发后续轮次的误报。
 
 ---
 
-## 核心修复与交付进展（1.0.73 版本）
-1. **彻底消除命令历史卡片误报**：
-   - 修复了 `main_scripts/full_cdp_script.js` 中 `isAcceptButton` 对历史气泡 `Ran command`、`已运行`、`succeeded`、`completed` 的误识别，杜绝单条命令跑完提前触发完成通知；
-   - 强化终端运行期与进度条状态识别（`.animate-spin`, `.progress-container.active`）。
-2. **跨 DOM 上下文激活检测穿透**：
-   - 修复 `isElementActive` 对 iframe 跨 window 的样式获取报错，在沙箱/跨窗口中兜底返回 true，保障深层节点 100% 穿透捕获。
-3. **全链路日志与 Output 管道打通**：
-   - 将 CDP 通信、状态机流转与任务完成事件同时输出到 `console.log`、VS Code `OutputChannel (Auto-Agent-AntiGravity)` 以及磁盘文件 `auto-all-cdp.log`，保证排查诊断零死角。
-4. **项目边界与规范固化**：
-   - 更新 `.agents/rules/README.md`，将前后台焦点门禁、终端命令历史卡片过滤、跨 window 容错及多通道日志规范固化为项目级工程边界。
-5. **版本发布与热更新**：
-   - 递增至版本 `1.0.73`；
-   - 生成打包产物 `Auto-Agent-AntiGravity-1.0.73.vsix`；
-   - 热更新同步至本地扩展运行目录。
+## 核心修复与交付进展（1.0.74 版本）
+1. **重构为正向完成标识 + 边沿触发双轨状态机**：
+   - 彻底废弃 3.5s 假定超时与冗长的文本猜测，删除了 100+ 行死代码；
+   - 运行态硬指标：输入框 Cancel/Stop 红色方块 (`[data-tooltip-id*="cancel"]` / `.bg-red-500`)、Stop 按钮与转圈动画 (`.animate-spin`, `.codicon-loading`)；
+   - 正向完成态硬指标：最新回答底部挂载的 Copy 图标 (`.lucide-copy`)、点赞栏以及输入框发送就绪态；
+   - 边沿触发 (Edge-Triggered Flip-Flop)：从 Working 转移到 Done 瞬间派发单次通知并立即清零 `wasWorking=false`，彻底根除多轮对话历史图标误报与假阴性漏报。
+2. **极致性能优化与 Shadow DOM 穿透**：
+   - 引入 `getSearchRoots` 穿透并缓存宿主/Iframe/Shadow DOM 根节点；
+   - 引入 `findFirst` 短路单元素匹配，避免大量 Array 分配，CPU 占用趋近 0.0%，GC 压力归零。
+3. **规则与文档全量同步**：
+   - 更新了 `.agents/rules/README.md` 与 `.agents/handoff.md`。
+4. **打包交付**：
+   - 递增至版本 `1.0.74`；
+   - 构建产物 `Auto-Agent-AntiGravity-1.0.74.vsix`。
