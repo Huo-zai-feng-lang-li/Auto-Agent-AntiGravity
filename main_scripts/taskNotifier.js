@@ -59,7 +59,7 @@ class TaskNotifier {
         let winW = 380;
 
         if (style === 'image' && fs.existsSync(path.join(mediaDir, chosenFile))) {
-            // 模式 1：随机轮播高奢艺术卡片（全画幅 · 极清悬浮 · 柔光弥散）
+            // 模式 1：随机轮播高奢艺术卡片（全画幅 · 极清悬浮 · 柔光弥散 · 丝滑圆角）
             winH = 180;
             winW = 380;
             xamlBody = `
@@ -67,17 +67,18 @@ class TaskNotifier {
             Cursor="Hand"
             Margin="8"
             BorderThickness="0"
-            ClipToBounds="True"
-            Background="#0B0D14">
+            Background="Transparent">
         <Border.Effect>
             <DropShadowEffect Color="#38BDF8" BlurRadius="24" ShadowDepth="0" Opacity="0.45"/>
         </Border.Effect>
-        <Grid>
-            <Image Source="${targetImagePath}" 
-                   Stretch="UniformToFill" 
-                   HorizontalAlignment="Center" 
-                   VerticalAlignment="Center"/>
-        </Grid>
+        <Border CornerRadius="16" 
+                BorderBrush="#3338BDF8" 
+                BorderThickness="1"
+                Background="#0B0D14">
+            <Border.Background>
+                <ImageBrush ImageSource="${targetImagePath}" Stretch="UniformToFill"/>
+            </Border.Background>
+        </Border>
     </Border>`;
         } else {
             // 模式 2：原生极清暗黑毛玻璃 UI 弹框（彩色高保真矢量拉花 + 科技流光条）
