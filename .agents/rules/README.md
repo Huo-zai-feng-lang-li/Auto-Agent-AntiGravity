@@ -30,10 +30,10 @@ graph TD
 3. **`main_scripts/full_cdp_script.js`**：
    - 注入到 IDE 内部的智能主循环 (`unifiedLoop`)。
    - **双轨状态机 (`isWorking` 与 `hasDoneIndicator`)**：
-     - **运行态硬指标**：检测输入框 Cancel/Stop 红色方块 (`[data-tooltip-id*="cancel"]` / `.bg-red-500`)、Stop 按钮及旋转动画 (`.animate-spin`, `.codicon-loading`)。
-     - **正向完成态硬指标**：最新回答底部挂载的 Copy 图标 (`.lucide-copy`)、点赞栏以及输入框发送就绪态。
+     - **Antigravity 主判据**：输入按钮出现 `input-send-button-stop-tooltip` 表示模型工作中；切回 `input-send-button-send-tooltip` 表示模型完成。这里的 Send/Stop 是模型输入按钮状态，不是 IDE 进程启动/关闭。
+     - **旧界面回退判据**：仅当专用 Send/Stop tooltip 不存在时，才检测 Cancel/Stop、旋转动画、Copy 图标和发送就绪态。
      - **边沿触发机制 (Edge-Triggered Flip-Flop)**：仅当从“工作中 (`wasWorking=true`)”转移为“完成态 (`!isWorking && hasDoneIndicator`)”瞬间派发单次 `TASK_COMPLETED` 事件，发完立即清零 `wasWorking=false`，彻底杜绝多轮对话历史旧图标误报与假阴性漏报。
-   - **极致性能与 Shadow DOM 穿透**：通过 `getSearchRoots` 缓存检索根节点（Iframe + ShadowRoot），配合 `findFirst` 短路单元素匹配，实现 0.0% CPU 占用与零内存垃圾。
+   - **性能与 Shadow DOM 穿透**：通过 `getSearchRoots` 缓存检索根节点（Iframe + ShadowRoot），使用 `findAny/querySelector` 短路完成态查询，并把多个按钮选择器合并为单次 DOM 扫描。禁止在没有基准数据时声称固定 CPU 占用或零 GC。
 4. **`main_scripts/taskNotifier.js`**：
    - 通过 `powershell.exe` 动态运行由 `taskNotifier.js` 生成的独立 WPF 窗体。
    - 严格保证 **2:1 黄金比例 (396x206)**、16px 圆角裁剪、发光边框与动态随机图片池。
@@ -53,18 +53,35 @@ graph TD
 ### 3.2 CDP 注入与状态机边界
 - **前后台免打扰与完成通知策略**：
   - **前台防打扰**：当 `vscode.window.state.focused === true`（用户在前台操作 IDE）时，严禁弹出任务完成桌面通知，避免干扰前台打字与浏览。
-  - **后台精准通知**：仅在 IDE 处于后台（`isFocused === false`）且大模型输出与所有 MCP/工具执行完全停机、静默保持 3500ms 后，方可派发单次通知。
+  - **后台精准通知**：只有模型输入按钮完成 `Stop -> Send` 边沿、没有待处理 Accept/Allow 动作、通知已启用且 IDE 失焦时才能弹出。当前实现没有“静默 3500ms”条件，不得在文档或修改中虚构该门禁。
+  - **MCP 严格隔离**：MCP、终端和工具加载器不得写入模型 `working` 状态；Antigravity 专用 Send/Stop tooltip 存在时，只信任该输入按钮，不得用全页面 spinner 触发通知状态机。
+  - **单次事件保证**：页面端使用 `wasWorking` 边沿并在发送后立即清零；宿主端再以 `lastCompletedNotifyTime` 的 5 秒冷却兜底。不得用冷却时间替代页面端状态机。
+  - **待确认门禁**：完成边沿出现后，若 `hasPendingAcceptButtons()` 为真，必须先完成自动点击；不得提前发送完成事件。
   - **历史卡片严格排除**：`isAcceptButton` 必须显式排除包含 `ran `, `ran command`, `已运行`, `succeeded`, `completed` 等已完成的历史卡片，防止历史记录被误判为待处理动作导致中间提早触发通知。
   - **跨 Window 样式容错**：`isElementActive` 必须使用 `el.ownerDocument?.defaultView || window` 计算 computedStyle，在沙箱/iframe 报错时兜底返回 true，防止生成中状态被漏判。
+- **自动点击独立边界**：
+  - Accept/Accept all/Allow/Apply/Execute/Confirm/Run 自动点击必须独立于完成通知开关和 `wasWorking`，并在每轮状态判断前执行。
+  - Antigravity 只能扫描 `#antigravity.agentPanel`、`.antigravity-agent-side-panel`、`.interactive-session`；Cursor/VS Code/Windsurf/Trae 保留通用选择器路径。
+  - `performClick` 和 `hasPendingAcceptButtons` 必须使用合并后的 selector list 一次扫描，禁止逐选择器重复 `querySelectorAll`。
+  - 危险命令仍必须先通过 banned command 检查；性能优化不得绕开命令安全门禁。
 - **低资源消耗保证**：
   - 严禁在注入脚本中使用 `while(true)` 无节制空转；
   - 必须使用 `MutationObserver` 响应式捕获 DOM 变动；
+  - Observer 只能绑定 `getSearchRoots(true)` 返回的真实 `root`，必须调用 `observer.observe(root, ...)`；禁止引用不存在的 `getDocuments()` 或循环外变量 `doc`。此错误会让统一循环直接退出，同时破坏自动点击与通知。
+  - MutationObserver 必须在 DOM 变更时同步捕获短暂的模型 working 状态，避免短响应发生在两次兜底轮询之间而漏报。
   - 轮询必须配合 `Web Worker` 定时器以避免 IDE 后台切屏时被 Chromium 降频挂起。
 
-### 3.3 日志与诊断通道边界
+### 3.3 IDE 路径与版本兼容边界
+- **已识别产品**：根据 `vscode.env.appName` 识别 Antigravity、Cursor、Windsurf、Trae 和 VS Code；未知产品回退为 Code 通用路径，不代表已验证兼容。
+- **不是任意路径扫描器**：Windows 仅检查当前 IDE 名称对应的开始菜单、桌面和任务栏快捷方式；找不到时使用当前运行进程的 `process.execPath` 重启。不会递归扫描所有磁盘寻找任意 IDE 可执行文件。
+- **CDP 端口范围**：当前宿主实际连接范围是 `9000~9002`。日志中旧的 `9000~9030` 文案不能作为事实；修改范围时必须同步代码、日志和测试。
+- **版本下限与实测边界**：清单声明 VS Code API `^1.75.0`，这只是安装/API 下限，不是“任意版本 UI 都兼容”的保证。自动点击与完成状态依赖 IDE DOM，IDE 升级后必须重新做真实 CDP 验收。
+- **禁止无证据承诺**：只有通过目标 IDE、目标版本、真实 Agent 面板的安装和运行态测试，才能标记该组合受支持。
+
+### 3.4 日志与诊断通道边界
 - **多管道同步输出**：所有关键事件必须同时分发至 `console.log`、VS Code `OutputChannel` 以及磁盘文件 `auto-all-cdp.log`，严禁出现仅在单端打印导致诊断断链。
 
-### 3.4 依赖与打包边界 (`.vscodeignore` 规范)
+### 3.5 依赖与打包边界 (`.vscodeignore` 规范)
 - **`ws` 模块必须保留**：由于 CDP 需要 WebSocket，`node_modules/ws` 及其依赖必须被打包进 VSIX。
 - **打包命令必须加 `--no-dependencies`**：防止 vsce 重新触发 `npm install --production` 篡改已修整好的 node_modules 结构。
 - **静态资源完整性**：打包前确认 `media/card_1.png` ~ `card_27.png` 均存在且通过打包白名单。
@@ -75,7 +92,11 @@ graph TD
 
 1. **修改代码必须一步一验证**：
    - 涉及 `taskNotifier.js` 时，必须直接通过 Node/PowerShell 运行本地临时脚本取证弹窗是否弹出且无异常抛出。
-   - 涉及 `full_cdp_script.js` 时，必须执行 `node -c` 保证语法零错误。
+   - 涉及 `full_cdp_script.js` 时，必须执行 `node --check main_scripts/full_cdp_script.js` 和 `npm test`。
+   - 涉及通知或自动点击时，静态测试不构成交付：必须以 `--remote-debugging-port=9000` 启动目标 IDE，安装新 VSIX 后重启，验证真实脚本已加载。
+   - 自动点击验收至少覆盖 Agent 面板中的 `Accept all`：按钮必须被点击并消失，点击统计增加。
+   - 通知验收至少覆盖 `Stop -> Send`：页面原始 `AUTO_AGENT_EVENT:TASK_COMPLETED` 必须恰好 1 条，CDP 宿主必须恰好接收 1 次；IDE 聚焦时必须抑制通知，失焦时才允许通知。
+   - 验收日志必须检查 `getDocuments is not defined`、`doc is not defined`、注入启动异常和重复完成事件。
 2. **发布与打 Tag 规范**：
    - 每次发布前递增 `package.json` 中的 `version`。
    - 确保 `vsce package` 构建出对应版本的 `.vsix` 文件。
