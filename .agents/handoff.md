@@ -20,5 +20,5 @@
 3. **规则与文档全量同步**：
    - 更新了 `.agents/rules/README.md` 与 `.agents/handoff.md`。
 4. **打包交付**：
-   - 递增至版本 `1.0.74`；
-   - 构建产物 `Auto-Agent-AntiGravity-1.0.74.vsix`。
+   - 递增至版本 `1.0.77`；
+   - 构建产物 `Auto-Agent-AntiGravity-1.0.77.vsix`。

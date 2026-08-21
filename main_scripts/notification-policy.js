@@ -1,13 +1,12 @@
 function shouldNotifyTaskCompletion({
   notifyEnabled,
   isFocused = false,
-  alwaysNotify = true,
   now,
   lastNotifiedAt,
   cooldownMs = 3000,
 }) {
   if (!notifyEnabled) return false;
-  if (isFocused && !alwaysNotify) return false;
+  if (isFocused) return false;
   return now - lastNotifiedAt >= cooldownMs;
 }
 

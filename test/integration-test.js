@@ -16,8 +16,36 @@ async function testEventDrivenRendererLoop() {
   const source = read('main_scripts/full_cdp_script.js');
   assert.doesNotThrow(() => new Function(source));
   assert.match(source, /new MutationObserver/);
+  assert.match(source, /input-send-button-stop-tooltip/);
+  assert.match(source, /input-send-button-send-tooltip/);
+  assert.match(source, /composerMode !== null/);
+  assert.match(source, /const findAny = \(selector\) =>/);
+  assert.match(source, /queryAll\(selectors\.join\('\, '\)\)/);
+  assert.match(source, /const actionSelectors = state\.currentMode === 'antigravity'/);
+  assert.match(source, /getSearchRoots\(true\)\.forEach\(root =>/);
+  assert.doesNotMatch(source, /getDocuments\(\)/, 'observer installation must not call an undefined document helper');
+  assert.match(source, /observer\.observe\(root,/);
+  assert.match(
+    source,
+    /const send = findAny\([\s\S]*?input-send-button-send-tooltip[\s\S]*?\)/,
+    'send state detection must include disabled Send buttons',
+  );
+  assert.match(
+    source,
+    /cachedSearchRoots = null;[\s\S]*?cachedRootsTimestamp = 0;/,
+    'action mutations must invalidate cached search roots',
+  );
+  assert.match(source, /自动接受独立于完成通知状态机/);
   assert.match(source, /attributeFilter: \['class', 'disabled', 'aria-disabled', 'style'\]/);
   assert.match(source, /Math\.max\(window\.__autoAllState\.pollInterval \|\| 1000, limit\)/);
+  assert.match(source, /#antigravity\\\\\.agentPanel/);
+  assert.doesNotMatch(source, /function isWorking\(\)[\s\S]*?hasPendingAcceptButtons\(\)\s*return true/);
+  assert.match(source, /function hasDoneIndicator\(\)[\s\S]*?#antigravity\\\\\.agentPanel[\s\S]*?lucide-copy/);
+  assert.match(
+    source,
+    /if \(!hasPendingAcceptButtons\(\) && hasDoneIndicator\(\)\)/,
+    'completion notification must wait for pending Accept/Allow actions',
+  );
 }
 
 async function testPendingCommandsAreRejectedOnDisconnect() {
@@ -64,7 +92,7 @@ async function testTaskCompletionNotificationPolicy() {
   );
   assert.equal(
     shouldNotifyTaskCompletion({ ...base, isFocused: true, alwaysNotify: true }),
-    true,
+    false,
   );
   assert.equal(
     shouldNotifyTaskCompletion({ ...base, lastNotifiedAt: 7_000 }),

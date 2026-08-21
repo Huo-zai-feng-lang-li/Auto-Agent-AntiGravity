@@ -45,4 +45,12 @@
 - [ ] 安装最新本地 VSIX，重启 IDE。
 - [ ] 验证 Accept/Execute/Confirm、危险命令拦截、重连和流式输出不卡顿。
 
+## 2026-08-21 实际闭环记录
+
+- [x] 修复 MutationObserver 启动链：使用 `getSearchRoots(true)`，并将 `observer.observe` 绑定到实际 root，消除未定义 `getDocuments/doc` 导致的循环中断。
+- [x] 合并点击选择器为单次 `queryAll(selectors.join(', '))`，Antigravity 限定 Agent 面板，其他 IDE 保留通用选择器。
+- [x] 使用 `findAny` 快路径检测 Send/Stop，保留 disabled Send 的完成判定，并在 DOM 变更时记录工作态，避免漏报。
+- [x] `npm test`、`node --check main_scripts/full_cdp_script.js`、编译和 VSIX 打包通过；`1.0.79` 已安装并重启运行。
+- [x] 真实 CDP 验收：Accept all 自动点击成功；Stop→Send 仅发出 1 条完成事件，聚焦 IDE 时宿主正确抑制通知。
+
 > 说明：不自动提交或暂存，避免覆盖用户现有 README 暂存内容。

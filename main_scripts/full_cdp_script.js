@@ -312,6 +312,17 @@
         return null;
     };
 
+    const findAny = (selector) => {
+        const roots = getSearchRoots();
+        for (let i = 0; i < roots.length; i++) {
+            try {
+                const element = roots[i].querySelector(selector);
+                if (element?.isConnected) return element;
+            } catch (e) { }
+        }
+        return null;
+    };
+
     const stripTimeSuffix = (text) => {
         return (text || '').trim().replace(/\s*\d+[smh]$/, '').trim();
     };
@@ -702,11 +713,9 @@
     }
 
     async function performClick(selectors) {
-        const found = [];
-        selectors.forEach(s => queryAll(s).forEach(el => found.push(el)));
         let clicked = 0;
         let verified = 0;
-        const uniqueFound = [...new Set(found)];
+        const uniqueFound = [...new Set(queryAll(selectors.join(', ')))];
 
         for (const el of uniqueFound) {
             if (isAcceptButton(el)) {
@@ -737,10 +746,12 @@
 
     async function unifiedLoop(sid) {
         log('[Loop] Unified Smart Loop STARTED');
+        const state = window.__autoAllState;
         let index = 0;
         let cycle = 0;
         let actionCheckRequested = true;
         let actionCheckRunning = false;
+        let wasWorking = false;
         const observers = [];
 
         const UNIVERSAL_BTN_SELECTORS = [
@@ -765,20 +776,40 @@
             'button.grow' // Antigravity specific
         ];
 
+        const actionSelectors = state.currentMode === 'antigravity'
+            ? [
+                '#antigravity\\.agentPanel button',
+                '.antigravity-agent-side-panel button',
+                '.interactive-session button',
+                '#antigravity\\.agentPanel [role="button"]',
+                '.antigravity-agent-side-panel [role="button"]',
+                '.interactive-session [role="button"]',
+                '#antigravity\\.agentPanel [class*="button"], .antigravity-agent-side-panel [class*="button"], .interactive-session [class*="button"]',
+                '#antigravity\\.agentPanel [class*="accept"], .antigravity-agent-side-panel [class*="accept"], .interactive-session [class*="accept"]',
+                '#antigravity\\.agentPanel [class*="apply"], .antigravity-agent-side-panel [class*="apply"], .interactive-session [class*="apply"]',
+                '#antigravity\\.agentPanel [class*="execute"], .antigravity-agent-side-panel [class*="execute"], .interactive-session [class*="execute"]',
+                '#antigravity\\.agentPanel [class*="confirm"], .antigravity-agent-side-panel [class*="confirm"], .interactive-session [class*="confirm"]',
+                '#antigravity\\.agentPanel .bg-ide-button-background, .antigravity-agent-side-panel .bg-ide-button-background, .interactive-session .bg-ide-button-background'
+            ]
+            : UNIVERSAL_BTN_SELECTORS;
+
         const requestActionCheck = () => { 
             actionCheckRequested = true; 
-            cachedDocuments = null;
+            cachedSearchRoots = null;
+            cachedRootsTimestamp = 0;
         };
 
         const installActionObservers = () => {
-            getDocuments().forEach(doc => {
-                if (!doc || typeof MutationObserver === 'undefined') return;
+            if (typeof MutationObserver === 'undefined') return;
+            getSearchRoots(true).forEach(root => {
+                if (!root) return;
                 const observer = new MutationObserver(mutations => {
                     if (mutations.some(mutation => mutation.type === 'childList' || mutation.type === 'attributes')) {
+                        if (getComposerMode() === 'working') wasWorking = true;
                         requestActionCheck();
                     }
                 });
-                observer.observe(doc, {
+                observer.observe(root, {
                     subtree: true,
                     childList: true,
                     attributes: true,
@@ -790,46 +821,82 @@
 
         installActionObservers();
 
+        function getComposerMode() {
+            // Antigravity 为模型生成使用专用的同一个输入按钮切换 Send/Stop。
+            const stop = findAny(
+                '#antigravity\\.agentPanel [data-tooltip-id="input-send-button-stop-tooltip"], ' +
+                '.antigravity-agent-side-panel [data-tooltip-id="input-send-button-stop-tooltip"], ' +
+                '.interactive-session [data-tooltip-id="input-send-button-stop-tooltip"]'
+            );
+            if (stop) return 'working';
+
+            const send = findAny(
+                '#antigravity\\.agentPanel [data-tooltip-id="input-send-button-send-tooltip"], ' +
+                '.antigravity-agent-side-panel [data-tooltip-id="input-send-button-send-tooltip"], ' +
+                '.interactive-session [data-tooltip-id="input-send-button-send-tooltip"]'
+            );
+            return send ? 'done' : null;
+        }
+
         function isWorking() {
-            // 1. 运行态硬指标：存在 Antigravity 专用的 cancel-tooltip 或红色方形取消按钮 (.bg-red-500)
+            // 专用输入按钮存在时，只信任它；MCP 工具的加载器不属于模型生成。
+            const composerMode = getComposerMode();
+            if (composerMode !== null) return composerMode === 'working';
+
+            // 旧界面没有专用按钮时，才使用受限的 Agent 面板回退检测。
             const cancelBtn = findFirst(
-                '[data-tooltip-id*="cancel"], .bg-red-500, button[aria-label*="Stop" i], button[title*="Stop" i], button[aria-label*="停止" i], button[title*="停止" i], button[aria-label*="Interrupt" i]'
+                '#antigravity\\.agentPanel [data-tooltip-id*="cancel"], .antigravity-agent-side-panel [data-tooltip-id*="cancel"], .interactive-session [data-tooltip-id*="cancel"], ' +
+                '#antigravity\\.agentPanel .bg-red-500, .antigravity-agent-side-panel .bg-red-500, .interactive-session .bg-red-500, ' +
+                '#antigravity\\.agentPanel button[aria-label*="Stop" i], .antigravity-agent-side-panel button[aria-label*="Stop" i], .interactive-session button[aria-label*="Stop" i], ' +
+                '#antigravity\\.agentPanel button[title*="Stop" i], .antigravity-agent-side-panel button[title*="Stop" i], .interactive-session button[title*="Stop" i], ' +
+                '#antigravity\\.agentPanel button[aria-label*="停止" i], .antigravity-agent-side-panel button[aria-label*="停止" i], .interactive-session button[aria-label*="停止" i], ' +
+                '#antigravity\\.agentPanel button[title*="停止" i], .antigravity-agent-side-panel button[title*="停止" i], .interactive-session button[title*="停止" i], ' +
+                '#antigravity\\.agentPanel button[aria-label*="Interrupt" i], .antigravity-agent-side-panel button[aria-label*="Interrupt" i], .interactive-session button[aria-label*="Interrupt" i]'
             );
             if (cancelBtn) return true;
 
-            // 2. 运行态动画：旋转加载中
-            const spinner = findFirst('.animate-spin, .codicon-loading, [data-status="running"], [data-status="in_progress"], .progress-container.active');
+            const spinner = findFirst(
+                '#antigravity\\.agentPanel .animate-spin, .antigravity-agent-side-panel .animate-spin, .interactive-session .animate-spin, ' +
+                '#antigravity\\.agentPanel .codicon-loading, .antigravity-agent-side-panel .codicon-loading, .interactive-session .codicon-loading, ' +
+                '#antigravity\\.agentPanel [data-status="running"], .antigravity-agent-side-panel [data-status="running"], .interactive-session [data-status="running"], ' +
+                '#antigravity\\.agentPanel [data-status="in_progress"], .antigravity-agent-side-panel [data-status="in_progress"], .interactive-session [data-status="in_progress"], ' +
+                '#antigravity\\.agentPanel .progress-container.active, .antigravity-agent-side-panel .progress-container.active, .interactive-session .progress-container.active'
+            );
             if (spinner) return true;
-
-            // 3. 待确认操作：界面有待自动点击的按钮
-            if (hasPendingAcceptButtons()) return true;
 
             return false;
         }
 
         function hasDoneIndicator() {
-            // 正向完成态硬指标：Cancel 红块彻底销毁，且存在 Copy 图标或输入就绪
-            const isCancelling = findFirst('[data-tooltip-id*="cancel"], .bg-red-500');
+            const composerMode = getComposerMode();
+            if (composerMode !== null) return composerMode === 'done';
+
+            // 旧界面回退：Cancel 红块彻底销毁，且存在 Copy 图标或输入就绪。
+            const isCancelling = findFirst(
+                '#antigravity\\.agentPanel [data-tooltip-id*="cancel"], .antigravity-agent-side-panel [data-tooltip-id*="cancel"], .interactive-session [data-tooltip-id*="cancel"], ' +
+                '#antigravity\\.agentPanel .bg-red-500, .antigravity-agent-side-panel .bg-red-500, .interactive-session .bg-red-500'
+            );
             if (isCancelling) return false;
 
-            return !!findFirst('.lucide-copy, svg.lucide-copy, [data-tooltip-id*="submit"], button[aria-label*="Send" i]');
+            return !!findFirst(
+                '#antigravity\\.agentPanel .lucide-copy, .antigravity-agent-side-panel .lucide-copy, .interactive-session .lucide-copy, ' +
+                '#antigravity\\.agentPanel svg.lucide-copy, .antigravity-agent-side-panel svg.lucide-copy, .interactive-session svg.lucide-copy, ' +
+                '#antigravity\\.agentPanel [data-tooltip-id*="submit"], .antigravity-agent-side-panel [data-tooltip-id*="submit"], .interactive-session [data-tooltip-id*="submit"], ' +
+                '#antigravity\\.agentPanel button[aria-label*="Send" i], .antigravity-agent-side-panel button[aria-label*="Send" i], .interactive-session button[aria-label*="Send" i]'
+            );
         }
 
         function hasPendingAcceptButtons() {
-            for (const s of UNIVERSAL_BTN_SELECTORS) {
-                const elements = queryAll(s);
-                for (const el of elements) {
-                    if (isAcceptButton(el)) return true;
-                }
+            const elements = queryAll(actionSelectors.join(', '));
+            for (const el of elements) {
+                if (isAcceptButton(el)) return true;
             }
             return false;
         }
 
-        let wasWorking = false;
-
-        while (window.__autoAllState.isRunning && window.__autoAllState.sessionID === sid) {
+        while (state.isRunning && state.sessionID === sid) {
             cycle++;
-            const isBG = window.__autoAllState.isBackgroundMode;
+            const isBG = state.isBackgroundMode;
             
             // 1. CLICK ACTIONS (自动化辅助点击)
             let clicked = 0;
@@ -837,7 +904,8 @@
                 actionCheckRequested = false;
                 actionCheckRunning = true;
                 try {
-                    clicked = await performClick(UNIVERSAL_BTN_SELECTORS);
+                    // 自动接受独立于完成通知状态机，始终扫描 Agent 面板。
+                    clicked = await performClick(actionSelectors);
                 } finally {
                     actionCheckRunning = false;
                 }
@@ -853,7 +921,7 @@
                 wasWorking = true;
             } else if (wasWorking) {
                 // 刚跑完生成，且检测到正向完成标识（Copy 图标或发送就绪）
-                if (hasDoneIndicator()) {
+                if (!hasPendingAcceptButtons() && hasDoneIndicator()) {
                     log('[Event] AI Final Response Completed (Positive Indicator Detected)! Emitting TASK_COMPLETED...');
                     console.log('[AUTO_AGENT_EVENT:TASK_COMPLETED]');
                     wasWorking = false;
