@@ -130,8 +130,6 @@
             if (!window.__autoAllState) {
                 window.__autoAllState = {
                     isRunning: false,
-                    tabNames: [],
-                    completionStatus: {},
                     sessionID: 0,
                     currentMode: null,
                     startTimes: {},
@@ -323,212 +321,6 @@
         return null;
     };
 
-    const stripTimeSuffix = (text) => {
-        return (text || '').trim().replace(/\s*\d+[smh]$/, '').trim();
-    };
-
-    const deduplicateNames = (names) => {
-        const counts = {};
-        return names.map(name => {
-            if (counts[name] === undefined) {
-                counts[name] = 1;
-                return name;
-            } else {
-                counts[name]++;
-                return `${name} (${counts[name]})`;
-            }
-        });
-    };
-
-    const updateTabNames = (tabs) => {
-        const rawNames = Array.from(tabs).map(tab => stripTimeSuffix(tab.textContent));
-        const tabNames = deduplicateNames(rawNames);
-
-        if (JSON.stringify(window.__autoAllState.tabNames) !== JSON.stringify(tabNames)) {
-            log(`updateTabNames: Detected ${tabNames.length} tabs: ${tabNames.join(', ')}`);
-            window.__autoAllState.tabNames = tabNames;
-        }
-    };
-
-    const updateConversationCompletionState = (rawTabName, status) => {
-        const tabName = stripTimeSuffix(rawTabName);
-        const current = window.__autoAllState.completionStatus[tabName];
-        if (current !== status) {
-            log(`[State] ${tabName}: ${current} → ${status}`);
-            window.__autoAllState.completionStatus[tabName] = status;
-        }
-    };
-
-    const OVERLAY_ID = '__autoAllBgOverlay';
-    const STYLE_ID = '__autoAllBgStyles';
-    const STYLES = `
-        #__autoAllBgOverlay { position: fixed; background: rgba(0, 0, 0, 0.98); z-index: 2147483647; font-family: sans-serif; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
-        #__autoAllBgOverlay.visible { opacity: 1; }
-        .aab-slot { margin-bottom: 12px; width: 80%; padding: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; }
-        .aab-header { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; }
-        .aab-progress-track { height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
-        .aab-progress-fill { height: 100%; width: 20%; background: #6b7280; transition: width 0.3s, background 0.3s; }
-        .aab-slot.working .aab-progress-fill { background: #a855f7; }
-        .aab-slot.done .aab-progress-fill { background: #22c55e; }
-        .aab-slot .status-text { color: #6b7280; }
-        .aab-slot.working .status-text { color: #a855f7; }
-        .aab-slot.done .status-text { color: #22c55e; }
-    `;
-
-    function showOverlay() {
-        if (document.getElementById(OVERLAY_ID)) {
-            log('[Overlay] Already exists, skipping creation');
-            return;
-        }
-
-        log('[Overlay] Creating overlay...');
-        const state = window.__autoAllState;
-
-        if (!document.getElementById(STYLE_ID)) {
-            const style = document.createElement('style');
-            style.id = STYLE_ID;
-            style.textContent = STYLES;
-            document.head.appendChild(style);
-            log('[Overlay] Styles injected');
-        }
-
-        const overlay = document.createElement('div');
-        overlay.id = OVERLAY_ID;
-
-        const container = document.createElement('div');
-        container.id = 'aab-c';
-        container.style.cssText = 'width:100%; display:flex; flex-direction:column; align-items:center;';
-        overlay.appendChild(container);
-
-        document.body.appendChild(overlay);
-        log('[Overlay] Overlay appended to body');
-
-        const ide = state.currentMode || 'cursor';
-        let panel = null;
-        if (ide === 'antigravity') {
-            panel = queryAll('#antigravity\\.agentPanel').find(p => p.offsetWidth > 50);
-        } else {
-            panel = queryAll('#workbench\\.parts\\.auxiliarybar').find(p => p.offsetWidth > 50);
-        }
-
-        if (panel) {
-            log(`[Overlay] Found panel for ${ide}, syncing position`);
-            const sync = () => {
-                const r = panel.getBoundingClientRect();
-                Object.assign(overlay.style, { top: r.top + 'px', left: r.left + 'px', width: r.width + 'px', height: r.height + 'px' });
-            };
-            sync();
-            new ResizeObserver(sync).observe(panel);
-        } else {
-            log('[Overlay] No panel found, using fullscreen');
-            Object.assign(overlay.style, { top: '0', left: '0', width: '100%', height: '100%' });
-        }
-
-        const waitingDiv = document.createElement('div');
-        waitingDiv.className = 'aab-waiting';
-        waitingDiv.style.cssText = 'color:#888; font-size:12px;';
-        waitingDiv.textContent = '正在扫描对话...';
-        container.appendChild(waitingDiv);
-
-        requestAnimationFrame(() => overlay.classList.add('visible'));
-    }
-
-    function updateOverlay() {
-        const state = window.__autoAllState;
-        const container = document.getElementById('aab-c');
-
-        if (!container) {
-            log('[Overlay] updateOverlay: No container found, skipping');
-            return;
-        }
-
-        log(`[Overlay] updateOverlay call: tabNames count=${state.tabNames?.length || 0}`);
-        const newNames = state.tabNames || [];
-
-        if (newNames.length === 0) {
-            if (!container.querySelector('.aab-waiting')) {
-                container.textContent = '';
-                const waitingDiv = document.createElement('div');
-                waitingDiv.className = 'aab-waiting';
-                waitingDiv.style.cssText = 'color:#888; font-size:12px;';
-                waitingDiv.textContent = '正在扫描对话...';
-                container.appendChild(waitingDiv);
-            }
-            return;
-        }
-
-        const waiting = container.querySelector('.aab-waiting');
-        if (waiting) waiting.remove();
-
-        const currentSlots = Array.from(container.querySelectorAll('.aab-slot'));
-
-        currentSlots.forEach(slot => {
-            const name = slot.getAttribute('data-name');
-            if (!newNames.includes(name)) slot.remove();
-        });
-
-        newNames.forEach(name => {
-            const status = state.completionStatus[name]; 
-            const isDone = status === 'done';
-
-            const statusClass = isDone ? 'done' : 'working';
-            const statusText = isDone ? '已完成' : '处理中';
-            const progressWidth = isDone ? '100%' : '66%';
-
-            let slot = container.querySelector(`.aab-slot[data-name="${name}"]`);
-
-            if (!slot) {
-                slot = document.createElement('div');
-                slot.className = `aab-slot ${statusClass}`;
-                slot.setAttribute('data-name', name);
-
-                const header = document.createElement('div');
-                header.className = 'aab-header';
-
-                const nameSpan = document.createElement('span');
-                nameSpan.textContent = name;
-                header.appendChild(nameSpan);
-
-                const statusSpan = document.createElement('span');
-                statusSpan.className = 'status-text';
-                statusSpan.textContent = statusText;
-                header.appendChild(statusSpan);
-
-                slot.appendChild(header);
-
-                const track = document.createElement('div');
-                track.className = 'aab-progress-track';
-
-                const fill = document.createElement('div');
-                fill.className = 'aab-progress-fill';
-                fill.style.width = progressWidth;
-                track.appendChild(fill);
-
-                slot.appendChild(track);
-                container.appendChild(slot);
-                log(`[Overlay] Created slot: ${name} (${statusText})`);
-            } else {
-                
-                slot.className = `aab-slot ${statusClass}`;
-
-                const statusSpan = slot.querySelector('.status-text');
-                if (statusSpan) statusSpan.textContent = statusText;
-
-                const bar = slot.querySelector('.aab-progress-fill');
-                if (bar) bar.style.width = progressWidth;
-            }
-        });
-    }
-
-    function hideOverlay() {
-        const overlay = document.getElementById(OVERLAY_ID);
-        if (overlay) {
-            log('[Overlay] Hiding overlay...');
-            overlay.classList.remove('visible');
-            setTimeout(() => overlay.remove(), 300);
-        }
-    }
-
     function findNearbyCommandText(el) {
         const commandSelectors = ['pre', 'code', 'pre code'];
         let commandText = '';
@@ -695,21 +487,16 @@
         return isElementActive(el);
     }
 
-    function waitForDisappear(el, timeout = 500) {
-        return new Promise(resolve => {
-            const startTime = Date.now();
-            const check = () => {
-                if (!isElementActive(el)) {
-                    resolve(true);
-                } else if (Date.now() - startTime >= timeout) {
-                    resolve(false);
-                } else {
-                    requestAnimationFrame(check);
-                }
-            };
-            
-            setTimeout(check, 50);
-        });
+    async function waitForDisappear(el, timeout = 500) {
+        // 不依赖 requestAnimationFrame：后台标签下 rAF 会被 Chromium 冻结导致永久挂起，
+        // 改用 Web Worker 计时轮询，前后台行为一致。
+        const startTime = Date.now();
+        const stepMs = 50;
+        while (Date.now() - startTime < timeout) {
+            if (!isElementActive(el)) return true;
+            await workerDelay(stepMs);
+        }
+        return !isElementActive(el);
     }
 
     async function performClick(selectors) {
@@ -744,10 +531,364 @@
         return verified;
     }
 
+    // ========================================================================
+    // 网络层多会话自动确认（事件驱动 / 长连接订阅，覆盖后台未打开的会话）
+    // 原理：IDE 后端 language server 为所有会话保留状态，与前端是否打开无关；
+    // 通过 Connect RPC 订阅每个会话的状态流，收到 WAITING 步骤即回发确认，
+    // 无需切换会话、不扫描后台 DOM、空闲时仅挂起长连接，CPU 占用趋近于零。
+    // ========================================================================
+    function createNetworkAutoAccept() {
+        const LS_SERVICE = 'exa.language_server_pb.LanguageServerService';
+        const WAITING = 'CORTEX_STEP_STATUS_WAITING';
+        const ENUM_INTERVAL = 15000;   // 低频发现新会话
+        const RECONNECT_DELAY = 1000; // 断线重连
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+
+        // 仅需 {confirm:true} 的交互类型（字段名与 CascadeUserInteraction oneof 对齐）
+        const CONFIRM_ONLY = {
+            deploy: 1, openBrowserUrl: 1, runExtensionCode: 1, executeBrowserJavascript: 1,
+            captureBrowserScreenshot: 1, clickBrowserPixel: 1, browserAction: 1,
+            openBrowserSetup: 1, confirmBrowserSetup: 1, sendCommandInput: 1,
+            readUrlContent: 1, mcp: 1
+        };
+
+        const ctx = {
+            running: false, port: null, token: null,
+            subs: new Map(),          // conversationId -> {ac, local}
+            handled: new Set(),       // conversationId#stepIndex 去重
+            origFetch: null, fetchHooked: false, enumScheduled: false, enumRunning: false
+        };
+
+        // ---- Connect streaming envelope：1 字节 flag + 4 字节大端长度 + payload ----
+        function encodeFrame(obj) {
+            const json = encoder.encode(JSON.stringify(obj));
+            const frame = new Uint8Array(5 + json.length);
+            new DataView(frame.buffer).setUint8(0, 0);
+            new DataView(frame.buffer).setUint32(1, json.length);
+            frame.set(json, 5);
+            return frame;
+        }
+
+        function rawFetch() { return ctx.origFetch || window.fetch.bind(window); }
+
+        function captureFromRequest(url, headers) {
+            const m = url.match(/(?:127\.0\.0\.1|localhost):(\d+)/);
+            if (m) ctx.port = m[1];
+            let t = null;
+            if (headers) {
+                if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+                    t = headers.get('x-codeium-csrf-token');
+                } else {
+                    t = headers['x-codeium-csrf-token'];
+                }
+            }
+            if (t && t !== ctx.token) {
+                ctx.token = t;
+                scheduleEnumerate();
+            }
+            // 用户发起新对话/发消息意味着可能出现新会话，立即补一次枚举
+            if (/StartCascade|SendUserCascadeMessage/.test(url)) scheduleEnumerate();
+        }
+
+        // hook fetch 仅用于捕获动态 port 与 csrf token（生产主路径由 cdp-handler
+        // 的 addScriptToEvaluateOnNewDocument 早期注入 window.__cap，这里做附加兜底）
+        function installFetchHook() {
+            if (ctx.fetchHooked) return;
+            ctx.origFetch = window.fetch.bind(window);
+            ctx.fetchHooked = true;
+            const orig = ctx.origFetch;
+            window.fetch = function (input, init) {
+                try {
+                    const url = typeof input === 'string' ? input : (input && input.url) || '';
+                    if (url.indexOf(LS_SERVICE) >= 0) captureFromRequest(url, init && init.headers);
+                } catch (e) { }
+                return orig(input, init);
+            };
+        }
+
+        function discoverPortFromPerf() {
+            try {
+                const ports = [...new Set(
+                    performance.getEntriesByType('resource')
+                        .map(e => { const mm = e.name.match(/(?:127\.0\.0\.1|localhost):(\d+)/); return mm && mm[1]; })
+                        .filter(Boolean)
+                )];
+                // resource 按时间升序，language server 可能重启换端口，取最新一个
+                if (ports.length) ctx.port = ports[ports.length - 1];
+            } catch (e) { }
+        }
+
+        function absorbEarlyCapture() {
+            const cap = window.__cap;
+            if (!cap) return;
+            if (cap.token) ctx.token = cap.token;
+            if (cap.port && !ctx.port) ctx.port = cap.port;
+        }
+
+        function baseUrl() { return `https://127.0.0.1:${ctx.port}/${LS_SERVICE}`; }
+        function authHeaders(extra) { return Object.assign({ 'x-codeium-csrf-token': ctx.token }, extra || {}); }
+
+        async function unary(method, bodyObj) {
+            const resp = await rawFetch()(baseUrl() + '/' + method, {
+                method: 'POST',
+                headers: authHeaders({ 'content-type': 'application/json' }),
+                body: JSON.stringify(bodyObj || {})
+            });
+            const text = await resp.text();
+            let json = null;
+            try { json = JSON.parse(text); } catch (e) { }
+            return { status: resp.status, json, text };
+        }
+
+        // ---- 状态增量合并（对齐 IDE 内部按 indices 覆盖语义）----
+        function applyIndexed(prev, indices, items, total) {
+            const n = total != null ? total : Math.max(prev.length, indices ? indices.length : 0);
+            const next = new Array(n);
+            for (let i = 0; i < prev.length && i < n; i++) next[i] = prev[i];
+            if (indices && items) {
+                for (let k = 0; k < indices.length; k++) {
+                    const idx = indices[k];
+                    if (idx >= 0 && idx < n) next[idx] = items[k];
+                }
+            }
+            return next;
+        }
+
+        function mergeUpdate(prev, u) {
+            const next = Object.assign({}, prev);
+            if (u.conversationId) next.conversationId = u.conversationId;
+            if (u.status !== undefined) next.status = u.status;
+            if (u.trajectoryId) next.trajectoryId = u.trajectoryId;
+            let traj = prev.trajectory || { steps: [] };
+            if (u.mainTrajectoryUpdate && u.mainTrajectoryUpdate.stepsUpdate) {
+                const su = u.mainTrajectoryUpdate.stepsUpdate;
+                traj = Object.assign({}, traj, {
+                    steps: applyIndexed(traj.steps || [], su.indices, su.steps, su.totalLength)
+                });
+            }
+            next.trajectory = traj;
+            return next;
+        }
+
+        // requestedInteraction 缺省时，按步骤内容字段推断交互类型
+        function inferKind(step) {
+            if (step.runCommand) return 'runCommand';
+            if (step.openBrowserUrl) return 'openBrowserUrl';
+            if (step.executeBrowserJavascript) return 'executeBrowserJavascript';
+            if (step.captureBrowserScreenshot) return 'captureBrowserScreenshot';
+            if (step.clickBrowserPixel) return 'clickBrowserPixel';
+            if (step.readUrlContent) return 'readUrlContent';
+            if (step.sendCommandInput) return 'sendCommandInput';
+            if (step.mcpTool) return 'mcp';
+            if (step.runExtensionCode) return 'runExtensionCode';
+            const fp = step.codeAction && step.codeAction.filePermissionRequest;
+            return fp ? 'filePermission' : null;
+        }
+
+        // 构造 CascadeUserInteraction 的平铺 oneof 字段；返回 null 表示无法自动处理
+        function buildInteraction(step) {
+            const reqKeys = step.requestedInteraction ? Object.keys(step.requestedInteraction) : [];
+            const kind = reqKeys[0] || inferKind(step);
+            if (!kind) return null;
+
+            if (kind === 'runCommand') {
+                const rc = step.runCommand || {};
+                const cmd = rc.proposedCommandLine || rc.commandLine || '';
+                if (typeof isCommandBanned === 'function' && isCommandBanned(cmd)) return { banned: true };
+                return {
+                    field: 'runCommand',
+                    payload: { confirm: true, proposedCommandLine: cmd, submittedCommandLine: cmd }
+                };
+            }
+            if (kind === 'filePermission') {
+                const spec = (step.requestedInteraction && step.requestedInteraction.filePermission)
+                    || (step.codeAction && step.codeAction.filePermissionRequest) || {};
+                if (!spec.absolutePathUri) return null;
+                return {
+                    field: 'filePermission',
+                    payload: { allow: true, scope: 'PERMISSION_SCOPE_ONCE', absolutePathUri: spec.absolutePathUri }
+                };
+            }
+            // 表单类需按 schema 应答，明确不自动：返回 skip 让调用方只标记一次、不重试
+            if (kind === 'elicitation') return { skip: true };
+            if (CONFIRM_ONLY[kind]) return { field: kind, payload: { confirm: true } };
+            // 其余（未知类型 / 字段暂缺）返回 null：不标记，后续帧补齐信息后仍可重试
+            return null;
+        }
+
+        async function scanWaiting(cid, local) {
+            const steps = local && local.trajectory && local.trajectory.steps;
+            if (!Array.isArray(steps)) return;
+            for (let i = 0; i < steps.length; i++) {
+                const step = steps[i];
+                if (!step || step.status !== WAITING) continue;
+                const key = cid + '#' + i;
+                if (ctx.handled.has(key)) continue;
+
+                const built = buildInteraction(step);
+                if (!built) continue; // 信息暂时不足：不标记，后续帧补齐后可重试
+                if (built.banned || built.skip) {
+                    // 命中黑名单 / 明确不自动（如 elicitation）：标记一次，避免每帧重复评估
+                    ctx.handled.add(key);
+                    if (built.banned) log(`[Net] Banned command skipped @ conv ${cid.slice(0, 8)} step ${i}`);
+                    continue;
+                }
+                ctx.handled.add(key);
+                try {
+                    const trajId = local.trajectoryId;
+                    const interaction = Object.assign(
+                        { trajectoryId: trajId, stepIndex: i },
+                        { [built.field]: built.payload }
+                    );
+                    const r = await unary('HandleCascadeUserInteraction', { cascadeId: cid, interaction });
+                    if (r.status === 200) {
+                        Analytics.trackClick('net:' + built.field, log);
+                        log(`[Net] Auto-confirmed ${built.field} @ conv ${cid.slice(0, 8)} step ${i}`);
+                    } else {
+                        ctx.handled.delete(key); // 失败允许后续重试
+                        log(`[Net] Handle failed status=${r.status} body=${(r.text || '').slice(0, 160)}`);
+                    }
+                } catch (e) {
+                    ctx.handled.delete(key);
+                    log(`[Net] Handle error: ${e && e.message}`);
+                }
+            }
+        }
+
+        // 为单个会话建立状态流长连接（空闲挂起，零轮询；断线自动重连）
+        function subscribe(cid) {
+            if (ctx.subs.has(cid)) return;
+            const rec = { ac: new AbortController(), local: null };
+            ctx.subs.set(cid, rec);
+
+            const loop = async () => {
+                while (ctx.running && ctx.subs.get(cid) === rec) {
+                    try {
+                        const resp = await rawFetch()(baseUrl() + '/StreamAgentStateUpdates', {
+                            method: 'POST',
+                            signal: rec.ac.signal,
+                            headers: authHeaders({
+                                'content-type': 'application/connect+json',
+                                'connect-protocol-version': '1'
+                            }),
+                            body: encodeFrame({ conversationId: cid, subscriberId: 'autoall-' + cid.slice(0, 8) })
+                        });
+                        if (!resp.body) throw new Error('no stream body');
+                        const reader = resp.body.getReader();
+                        let buf = new Uint8Array(0);
+                        while (true) {
+                            const chunk = await reader.read();
+                            if (chunk.done) break;
+                            const merged = new Uint8Array(buf.length + chunk.value.length);
+                            merged.set(buf, 0);
+                            merged.set(chunk.value, buf.length);
+                            buf = merged;
+                            while (buf.length >= 5) {
+                                const dv = new DataView(buf.buffer, buf.byteOffset);
+                                const flag = dv.getUint8(0);
+                                const len = dv.getUint32(1);
+                                if (len > 64 * 1024 * 1024) { buf = new Uint8Array(0); break; }
+                                if (buf.length < 5 + len) break;
+                                const payload = buf.slice(5, 5 + len);
+                                buf = buf.slice(5 + len);
+                                if (flag !== 0) continue;
+                                let msg = null;
+                                try { msg = JSON.parse(decoder.decode(payload)); } catch (e) { continue; }
+                                if (msg.update) {
+                                    rec.local = mergeUpdate(rec.local || { conversationId: cid }, msg.update);
+                                    await scanWaiting(cid, rec.local);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        if (!ctx.running || rec.ac.signal.aborted) return;
+                    }
+                    await workerDelay(RECONNECT_DELAY);
+                }
+            };
+            loop();
+        }
+
+        function scheduleEnumerate() {
+            if (ctx.enumScheduled || !ctx.running) return;
+            ctx.enumScheduled = true;
+            workerDelay(200).then(() => { ctx.enumScheduled = false; enumerate(); });
+        }
+
+        async function enumerate() {
+            // in-flight 锁：慢响应未返回时，周期/事件触发的再次枚举直接跳过（枚举本身幂等）
+            if (!ctx.running || ctx.enumRunning) return;
+            ctx.enumRunning = true;
+            try {
+                discoverPortFromPerf();
+                absorbEarlyCapture();
+                if (!ctx.port || !ctx.token) return;
+                const r = await unary('GetAllCascadeTrajectories', {});
+                if (r.status !== 200 || !r.json) return;
+                const sums = r.json.trajectorySummaries || {};
+                const live = new Set(Object.keys(sums));
+                // 清理已删除会话的订阅，避免对不存在的会话无限重连造成空转
+                for (const cid of [...ctx.subs.keys()]) {
+                    if (!live.has(cid)) {
+                        const stale = ctx.subs.get(cid);
+                        try { stale.ac.abort(); } catch (e) { }
+                        ctx.subs.delete(cid);
+                        // 同步清理该会话的去重键，避免会话删除后 handled 无限累积
+                        const prefix = cid + '#';
+                        for (const k of [...ctx.handled.keys()]) {
+                            if (k.startsWith(prefix)) ctx.handled.delete(k);
+                        }
+                    }
+                }
+                for (const cid of live) subscribe(cid);
+            } catch (e) { }
+            finally { ctx.enumRunning = false; }
+        }
+
+        // 用 Web Worker 计时驱动枚举，后台标签下不被 Chromium 节流
+        async function enumLoop() {
+            while (ctx.running) {
+                await workerDelay(ENUM_INTERVAL);
+                enumerate();
+            }
+        }
+
+        function start() {
+            if (ctx.running) return;
+            ctx.running = true;
+            installFetchHook();
+            discoverPortFromPerf();
+            absorbEarlyCapture();
+            // 只读诊断视图（订阅数 / 端口 / token 状态 / 已处理数），供自查与排障
+            if (window.__autoAllState) {
+                window.__autoAllState.netDiag = {
+                    subs: ctx.subs,
+                    get port() { return ctx.port; },
+                    get tokenState() { return ctx.token ? 'set' : 'none'; },
+                    handledCount: () => ctx.handled.size
+                };
+            }
+            enumerate();
+            enumLoop();
+            log('[Net] Multi-conversation network auto-accept started');
+        }
+
+        function stop() {
+            ctx.running = false;
+            for (const [, rec] of ctx.subs) { try { rec.ac.abort(); } catch (e) { } }
+            ctx.subs.clear();
+            ctx.handled.clear();
+            log('[Net] Multi-conversation network auto-accept stopped');
+        }
+
+        return { start, stop };
+    }
+    let networkAutoAccept = null;
+
     async function unifiedLoop(sid) {
         log('[Loop] Unified Smart Loop STARTED');
         const state = window.__autoAllState;
-        let index = 0;
         let cycle = 0;
         let actionCheckRequested = true;
         let actionCheckRunning = false;
@@ -766,14 +907,6 @@
             '.bg-ide-button-background', // Antigravity specific
             '.interactive-input-execute', // VS Code standard
             '.chat-apply-button'
-        ];
-
-        const TAB_SELECTORS = [
-            '#workbench\\.parts\\.auxiliarybar ul[role="tablist"] li[role="tab"]',
-            '.monaco-pane-view .monaco-list-row[role="listitem"]',
-            'div[role="tablist"] div[role="tab"]',
-            '.chat-session-item',
-            'button.grow' // Antigravity specific
         ];
 
         const actionSelectors = state.currentMode === 'antigravity'
@@ -896,8 +1029,7 @@
 
         while (state.isRunning && state.sessionID === sid) {
             cycle++;
-            const isBG = state.isBackgroundMode;
-            
+
             // 1. CLICK ACTIONS (自动化辅助点击)
             let clicked = 0;
             if (actionCheckRequested && !actionCheckRunning) {
@@ -928,57 +1060,11 @@
                 }
             }
 
-            // If not in background mode, we just stay on this tab and poll
-            if (!isBG) {
-                const limit = window.__autoAllState.isPro ? 200 : 5000;
-                await workerDelay(Math.max(window.__autoAllState.pollInterval || 1000, limit));
-                continue;
-            }
-
-            // 2. BACKGROUND MULTI-TAB SWITCHING
-            await workerDelay(800);
-
-            let tabs = [];
-            for (const selector of TAB_SELECTORS) {
-                tabs = queryAll(selector);
-                if (tabs.length > 0) break;
-            }
-
-            updateTabNames(tabs);
-
-            if (tabs.length > 1) {
-                const targetTab = tabs[index % tabs.length];
-                const tabLabel = stripTimeSuffix(targetTab.getAttribute('aria-label') || targetTab.textContent?.trim() || '');
-                
-                // Smart check for completion (if supported by IDE)
-                const isAlreadyDone = window.__autoAllState.completionStatus[tabLabel] === 'done';
-
-                if (!isAlreadyDone) {
-                    log(`[Loop] Cycle ${cycle}: Switching to tab "${tabLabel}"`);
-                    targetTab.dispatchEvent(new MouseEvent('click', { view: window, bubbles: true, cancelable: true }));
-                    
-                    // Small delay to let tab render
-                    await workerDelay(1500);
-
-                    // Optional: Try to detect "Done" state based on UI badges
-                    const badges = queryAll('span, div').filter(s => {
-                        const t = s.textContent.trim();
-                        return t === 'Good' || t === 'Bad' || t === 'Finished' || t === 'Completed';
-                    });
-
-                    if (badges.length > 0) {
-                        updateConversationCompletionState(tabLabel, 'done');
-                        log(`[Loop] Cycle ${cycle}: Tab "${tabLabel}" marked as DONE via UI detection`);
-                    }
-                    
-                    index++;
-                } else {
-                    index++; // Skip to next
-                }
-            }
-
-            updateOverlay();
-            await workerDelay(2500); 
+            // 3. 前台 DOM 兜底：只扫描当前可见会话，绝不切换会话标签。
+            //    后台 / 未打开会话由网络层状态流长连接统一自动确认，
+            //    避免循环切换大会话引发的重渲染卡顿。
+            const loopLimit = window.__autoAllState.isPro ? 200 : 5000;
+            await workerDelay(Math.max(window.__autoAllState.pollInterval || 1000, loopLimit));
         }
         observers.forEach(observer => observer.disconnect());
         log('[Loop] Unified Smart Loop STOPPED');
@@ -1051,6 +1137,16 @@
 
             log(`Agent Loaded (IDE: ${ide}, Multi-Tab: ${isBG}, isPro: ${isPro})`, true);
             unifiedLoop(sid);
+
+            // 网络层多会话自动确认：单例常驻，覆盖当前未打开的后台会话。
+            // 扩展会周期性调用 __autoAllStart（syncSessions），start() 内部幂等，
+            // 不得在此重建实例，否则长连接反复断开重连、去重状态丢失。
+            try {
+                if (!networkAutoAccept) networkAutoAccept = createNetworkAutoAccept();
+                networkAutoAccept.start();
+            } catch (e) {
+                log(`[Net] start error: ${e.message}`);
+            }
             return "started";
         } catch (e) {
             log(`ERROR in __autoAllStart: ${e.message}`);
@@ -1060,7 +1156,7 @@
 
     window.__autoAllStop = function () {
         window.__autoAllState.isRunning = false;
-        hideOverlay();
+        try { if (networkAutoAccept) networkAutoAccept.stop(); } catch (e) { }
         log("Agent Stopped.");
     };
 

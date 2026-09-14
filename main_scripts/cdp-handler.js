@@ -119,6 +119,9 @@ class CDPHandler {
                 } catch (e) {
                     this.log(`Runtime.enable failed on page ${page.id}: ${e.message || e}`);
                 }
+                // 早期注入 token 捕获器：在页面任何 language-server 请求前 hook fetch，
+                // 供网络层多会话自动确认获取动态端口与 CSRF token。
+                await this.installEarlyTokenHook(page.id);
                 resolve(true);
             });
             ws.on('message', (data) => {
@@ -137,6 +140,16 @@ class CDPHandler {
                                 this.onTaskCompletedCallback({ pageId: page.id });
                             }
                         }
+                    } else if (msg.method === 'Page.frameNavigated'
+                        && msg.params?.frame && !msg.params.frame.parentId) {
+                        // 主框架导航/reload 后页面 window 已重置，旧注入标记失效，
+                        // 清除后由下一次 syncSessions 重新注入主脚本（token 钩子由
+                        // addScriptToEvaluateOnNewDocument 自动重装）。
+                        const conn = this.connections.get(page.id);
+                        if (conn && conn.injected) {
+                            conn.injected = false;
+                            this.log(`Main frame navigated on ${page.id}, marked for re-inject`);
+                        }
                     }
                 } catch (e) { }
             });
@@ -151,6 +164,49 @@ class CDPHandler {
                 this.rejectPendingForPage(page.id, new Error('CDP connection closed'));
             });
         });
+    }
+
+    /**
+     * 在页面最早时机注入一个极简 fetch 钩子，捕获 language server 的动态端口与
+     * x-codeium-csrf-token，写入 window.__cap，供 full_cdp_script 的网络层自动确认消费。
+     * - addScriptToEvaluateOnNewDocument：覆盖后续每次导航/重载（文档脚本执行前运行）
+     * - 立即 evaluate 一次：覆盖当前已加载文档（幂等，靠 __capInstalled 防重复包装）
+     * @param {string} pageId CDP 目标 id
+     */
+    async installEarlyTokenHook(pageId) {
+        const hook = `(function(){
+            try {
+                window.__cap = window.__cap || { port: null, token: null, seen: 0 };
+                if (window.__capInstalled) return;
+                window.__capInstalled = true;
+                var origFetch = window.fetch.bind(window);
+                window.fetch = function(input, init){
+                    try {
+                        var u = typeof input === 'string' ? input : ((input && input.url) || '');
+                        if (u.indexOf('LanguageServerService') >= 0) {
+                            var m = u.match(/(?:127\\.0\\.0\\.1|localhost):(\\d+)/);
+                            if (m) window.__cap.port = m[1];
+                            var h = init && init.headers, t = null;
+                            if (h) {
+                                t = (typeof Headers !== 'undefined' && h instanceof Headers)
+                                    ? h.get('x-codeium-csrf-token')
+                                    : h['x-codeium-csrf-token'];
+                            }
+                            if (t) { window.__cap.token = t; window.__cap.seen++; }
+                        }
+                    } catch (e) {}
+                    return origFetch(input, init);
+                };
+            } catch (e) {}
+        })();`;
+        try {
+            await this.sendCommand(pageId, 'Page.enable', {});
+            await this.sendCommand(pageId, 'Page.addScriptToEvaluateOnNewDocument', { source: hook });
+            await this.sendCommand(pageId, 'Runtime.evaluate', { expression: hook });
+            this.log(`Early token hook installed on page ${pageId}`);
+        } catch (e) {
+            this.log(`Early token hook failed on ${pageId}: ${e.message || e}`);
+        }
     }
 
     async injectAndStart(pageId, config) {
