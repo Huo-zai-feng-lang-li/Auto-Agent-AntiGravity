@@ -4,6 +4,13 @@
 
     if (typeof window === 'undefined') return;
 
+    // 重入保护：CDP 断线重连 / frameNavigated 重复注入会在同一 JS 上下文再次执行本 IIFE。
+    // 若不清理，上一实例闭包里的选举广播、状态流订阅、DOM 循环都不会退出，造成多实例叠加
+    // （重复订阅，并出现持续发心跳、压制新实例的“幽灵 leader”）。先彻底拆除上一实例。
+    if (typeof window.__autoAllTeardown === 'function') {
+        try { window.__autoAllTeardown(); } catch (e) { }
+    }
+
     const Analytics = (function () {
         
         const TERMINAL_KEYWORDS = ['run', 'execute', 'command', 'terminal'];
@@ -555,10 +562,35 @@
 
         const ctx = {
             running: false, port: null, token: null,
-            subs: new Map(),          // conversationId -> {ac, local}
+            subs: new Map(),          // conversationId -> {ac, local, lastStat}
             handled: new Set(),       // conversationId#stepIndex 去重
-            origFetch: null, fetchHooked: false, enumScheduled: false, enumRunning: false
+            origFetch: null, fetchHooked: false, enumScheduled: false, enumRunning: false,
+            // 跨页面 Leader 选举：同一 LS 端口只保留一个订阅者，消除多窗口重复订阅
+            myId: genPageId(),        // 本页面固定唯一 id（固定长度十六进制，字典序即随机序）
+            leaderMap: new Map(),     // port -> {id, ts} 已知 leader 心跳
+            isLeader: false,          // 当前端口本页面是否为 leader（只有 leader 建订阅）
+            engineOn: false,          // 订阅引擎是否在跑（enumerate + 各会话长连接）
+            electionTimer: null, beatAt: 0, voteAt: 0, channel: null,
+            trace: []                 // 诊断环形缓冲：记录状态帧/WAITING/确认链路，供排障抓现场
         };
+
+        // 生成本页面唯一 id（固定 16 位 hex，保证跨页面字典序比较公平）
+        function genPageId() {
+            try {
+                const a = new Uint8Array(8);
+                if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(a);
+                else for (let i = 0; i < 8; i++) a[i] = (Math.random() * 256) | 0;
+                return Array.from(a, x => x.toString(16).padStart(2, '0')).join('');
+            } catch (e) { return Date.now().toString(16).padStart(16, '0'); }
+        }
+
+        // 诊断环形缓冲：只保留最近 240 条关键事件，空闲不产生任何事件
+        function pushTrace(o) {
+            try {
+                ctx.trace.push(Object.assign({ ms: Date.now() % 100000000 }, o));
+                if (ctx.trace.length > 240) ctx.trace.shift();
+            } catch (e) { }
+        }
 
         // ---- Connect streaming envelope：1 字节 flag + 4 字节大端长度 + payload ----
         function encodeFrame(obj) {
@@ -693,9 +725,18 @@
             if (!kind) return null;
 
             if (kind === 'runCommand') {
-                const rc = step.runCommand || {};
-                const cmd = rc.proposedCommandLine || rc.commandLine || '';
+                // 命令详情优先顶层 runCommand，回退 requestedInteraction.runCommand（与前端确认条读取路径对齐）
+                const rc = step.runCommand
+                    || (step.requestedInteraction && step.requestedInteraction.runCommand)
+                    || {};
+                let cmd = rc.proposedCommandLine || rc.commandLine || rc.submittedCommandLine || '';
+                // 前端兜底：commandLine 为空时用 command + args 拼（保持一致，避免空命令确认无效）
+                if (!cmd && rc.command) {
+                    const args = Array.isArray(rc.args) ? rc.args.map(a => String(a)).join(' ') : (rc.args || '');
+                    cmd = (rc.command + ' ' + args).trim();
+                }
                 if (typeof isCommandBanned === 'function' && isCommandBanned(cmd)) return { banned: true };
+                if (!cmd) return null; // 命令暂缺：不标记，后续帧补齐后可重试
                 return {
                     field: 'runCommand',
                     payload: { confirm: true, proposedCommandLine: cmd, submittedCommandLine: cmd }
@@ -726,11 +767,22 @@
                 const key = cid + '#' + i;
                 if (ctx.handled.has(key)) continue;
 
+                // 诊断：记录到达此处的 WAITING 步骤形态，定位“没点到”卡在哪一环
+                pushTrace({
+                    t: 'wait', cid: cid.slice(0, 8), idx: i,
+                    req: step.requestedInteraction ? Object.keys(step.requestedInteraction) : null,
+                    top: Object.keys(step), hasRC: !!step.runCommand
+                });
                 const built = buildInteraction(step);
-                if (!built) continue; // 信息暂时不足：不标记，后续帧补齐后可重试
+                if (!built) {
+                    // 信息暂时不足：不标记，后续帧补齐后可重试；留痕便于发现“永远补不齐”的类型
+                    pushTrace({ t: 'build', cid: cid.slice(0, 8), idx: i, r: 'null' });
+                    continue;
+                }
                 if (built.banned || built.skip) {
                     // 命中黑名单 / 明确不自动（如 elicitation）：标记一次，避免每帧重复评估
                     ctx.handled.add(key);
+                    pushTrace({ t: 'build', cid: cid.slice(0, 8), idx: i, r: built.banned ? 'banned' : 'skip' });
                     if (built.banned) log(`[Net] Banned command skipped @ conv ${cid.slice(0, 8)} step ${i}`);
                     continue;
                 }
@@ -742,6 +794,7 @@
                         { [built.field]: built.payload }
                     );
                     const r = await unary('HandleCascadeUserInteraction', { cascadeId: cid, interaction });
+                    pushTrace({ t: 'rpc', cid: cid.slice(0, 8), idx: i, f: built.field, s: r.status });
                     if (r.status === 200) {
                         Analytics.trackClick('net:' + built.field, log);
                         log(`[Net] Auto-confirmed ${built.field} @ conv ${cid.slice(0, 8)} step ${i}`);
@@ -751,6 +804,7 @@
                     }
                 } catch (e) {
                     ctx.handled.delete(key);
+                    pushTrace({ t: 'rpc', cid: cid.slice(0, 8), idx: i, err: (e && e.message || '').slice(0, 80) });
                     log(`[Net] Handle error: ${e && e.message}`);
                 }
             }
@@ -758,12 +812,12 @@
 
         // 为单个会话建立状态流长连接（空闲挂起，零轮询；断线自动重连）
         function subscribe(cid) {
-            if (ctx.subs.has(cid)) return;
-            const rec = { ac: new AbortController(), local: null };
+            if (!ctx.engineOn || ctx.subs.has(cid)) return;
+            const rec = { ac: new AbortController(), local: null, lastStat: new Map() };
             ctx.subs.set(cid, rec);
 
             const loop = async () => {
-                while (ctx.running && ctx.subs.get(cid) === rec) {
+                while (ctx.running && ctx.engineOn && ctx.subs.get(cid) === rec) {
                     try {
                         const resp = await rawFetch()(baseUrl() + '/StreamAgentStateUpdates', {
                             method: 'POST',
@@ -797,12 +851,13 @@
                                 try { msg = JSON.parse(decoder.decode(payload)); } catch (e) { continue; }
                                 if (msg.update) {
                                     rec.local = mergeUpdate(rec.local || { conversationId: cid }, msg.update);
+                                    traceStepChanges(cid, rec, msg.update);
                                     await scanWaiting(cid, rec.local);
                                 }
                             }
                         }
                     } catch (e) {
-                        if (!ctx.running || rec.ac.signal.aborted) return;
+                        if (!ctx.running || !ctx.engineOn || rec.ac.signal.aborted) return;
                     }
                     await workerDelay(RECONNECT_DELAY);
                 }
@@ -810,21 +865,40 @@
             loop();
         }
 
+        // 仅记录“非 DONE 步骤”的状态跳变（如 RUNNING->WAITING），低频且能确认 WAITING 帧是否到达本层
+        function traceStepChanges(cid, rec, update) {
+            try {
+                const su = update && update.mainTrajectoryUpdate && update.mainTrajectoryUpdate.stepsUpdate;
+                if (!su || !Array.isArray(su.indices)) return;
+                for (let k = 0; k < su.indices.length; k++) {
+                    const st = su.steps && su.steps[k];
+                    if (!st || !st.status || st.status === 'CORTEX_STEP_STATUS_DONE') continue;
+                    const idx = su.indices[k];
+                    const short = st.status.replace('CORTEX_STEP_STATUS_', '');
+                    if (rec.lastStat.get(idx) !== st.status) {
+                        rec.lastStat.set(idx, st.status);
+                        pushTrace({ t: 'step', cid: cid.slice(0, 8), idx, st: short });
+                    }
+                }
+            } catch (e) { }
+        }
+
         function scheduleEnumerate() {
-            if (ctx.enumScheduled || !ctx.running) return;
+            if (ctx.enumScheduled || !ctx.running || !ctx.engineOn) return;
             ctx.enumScheduled = true;
             workerDelay(200).then(() => { ctx.enumScheduled = false; enumerate(); });
         }
 
         async function enumerate() {
-            // in-flight 锁：慢响应未返回时，周期/事件触发的再次枚举直接跳过（枚举本身幂等）
-            if (!ctx.running || ctx.enumRunning) return;
+            // 仅 leader 建订阅；in-flight 锁避免慢响应时重复枚举（枚举本身幂等）
+            if (!ctx.running || !ctx.engineOn || ctx.enumRunning) return;
             ctx.enumRunning = true;
             try {
                 discoverPortFromPerf();
                 absorbEarlyCapture();
                 if (!ctx.port || !ctx.token) return;
                 const r = await unary('GetAllCascadeTrajectories', {});
+                if (!ctx.engineOn) return; // await 期间已降级为 follower：丢弃本次结果，不再建订阅
                 if (r.status !== 200 || !r.json) return;
                 const sums = r.json.trajectorySummaries || {};
                 const live = new Set(Object.keys(sums));
@@ -848,10 +922,109 @@
 
         // 用 Web Worker 计时驱动枚举，后台标签下不被 Chromium 节流
         async function enumLoop() {
-            while (ctx.running) {
+            while (ctx.running && ctx.engineOn) {
                 await workerDelay(ENUM_INTERVAL);
                 enumerate();
             }
+        }
+
+        // -------- 跨页面 Leader 选举（同一 LS 端口只保留一个订阅者）--------
+        // 同源（vscode-file://vscode-app）多窗口共享一个 BroadcastChannel；
+        // Bully 规则：固定长度随机 id 最小且心跳活跃者为 leader，崩溃后租约过期自动接管。
+        const COORD_CH = 'autoall-coord-v1';
+        const LEASE_MS = 6000, BEAT_MS = 2000, VOTE_MS = 1500, TICK_MS = 1000;
+
+        function coordPost(type) {
+            try {
+                if (ctx.channel && ctx.port) {
+                    ctx.channel.postMessage({ ch: 'aa', id: ctx.myId, port: ctx.port, type, ts: Date.now() });
+                }
+            } catch (e) { }
+        }
+
+        function onCoord(msg) {
+            if (!msg || msg.ch !== 'aa' || !msg.port || msg.port !== ctx.port || msg.id === ctx.myId) return;
+            // leader 主动退位：移除其记录，让其余页面尽快重选，而非等租约过期
+            if (msg.type === 'yield') { ctx.leaderMap.delete(msg.port); return; }
+            ctx.leaderMap.set(msg.port, { id: msg.id, ts: Date.now() });
+            // 存在 id 更小的活跃对端时，本页面绝不能当 leader，立即降级
+            if (msg.id < ctx.myId && ctx.isLeader) stepDown();
+        }
+
+        // 纯函数：当前端口本页面是否应担任 leader
+        function shouldBeLeader(now) {
+            const L = ctx.leaderMap.get(ctx.port);
+            if (!L || now - L.ts > LEASE_MS) return true; // 无 leader 或租约过期 -> 可接管
+            return L.id >= ctx.myId;                       // 现 leader id 更大 -> 本页面更有资格
+        }
+
+        function becomeLeader() {
+            ctx.isLeader = true;
+            pushTrace({ t: 'leader', lead: 1, port: ctx.port });
+            log('[Net] Became subscription leader for this window');
+            engineStart();
+            ctx.beatAt = Date.now();
+            coordPost('beat');
+        }
+
+        function stepDown() {
+            if (!ctx.isLeader) return;
+            ctx.isLeader = false;
+            pushTrace({ t: 'leader', lead: 0 });
+            log('[Net] Stepped down (another window leads subscriptions)');
+            engineStop();
+        }
+
+        function electionTick() {
+            discoverPortFromPerf();
+            absorbEarlyCapture();
+            if (!ctx.port) return;
+            // LS 重启换端口：丢弃旧端口的选举记录，避免被残留 leader 压制
+            if (ctx.lastPort && ctx.lastPort !== ctx.port) {
+                ctx.leaderMap.delete(ctx.lastPort);
+                if (ctx.isLeader) { engineStop(); ctx.isLeader = false; }
+            }
+            ctx.lastPort = ctx.port;
+            const now = Date.now();
+            const lead = shouldBeLeader(now);
+            if (lead && !ctx.isLeader) { becomeLeader(); return; }
+            if (!lead && ctx.isLeader) { stepDown(); return; }
+            if (ctx.isLeader && now - ctx.beatAt >= BEAT_MS) { ctx.beatAt = now; coordPost('beat'); }
+            else if (!ctx.isLeader && now - ctx.voteAt >= VOTE_MS) {
+                const L = ctx.leaderMap.get(ctx.port);
+                if (!L || now - L.ts > LEASE_MS) { ctx.voteAt = now; coordPost('vote'); }
+            }
+        }
+
+        async function electionLoop() {
+            while (ctx.running) {
+                try { electionTick(); } catch (e) { }
+                await workerDelay(TICK_MS);
+            }
+        }
+
+        // 订阅引擎：仅 leader 运行（枚举 + 每会话长连接）
+        function engineStart() {
+            if (ctx.engineOn) return;
+            ctx.engineOn = true;
+            enumerate();
+            enumLoop();
+        }
+
+        function engineStop() {
+            if (!ctx.engineOn) return;
+            ctx.engineOn = false;
+            for (const [, rec] of ctx.subs) { try { rec.ac.abort(); } catch (e) { } }
+            ctx.subs.clear();
+            ctx.handled.clear();
+        }
+
+        function startElection() {
+            try {
+                ctx.channel = new BroadcastChannel(COORD_CH);
+                ctx.channel.onmessage = ev => onCoord(ev && ev.data);
+            } catch (e) { ctx.channel = null; }
+            electionLoop();
         }
 
         function start() {
@@ -860,25 +1033,33 @@
             installFetchHook();
             discoverPortFromPerf();
             absorbEarlyCapture();
-            // 只读诊断视图（订阅数 / 端口 / token 状态 / 已处理数），供自查与排障
+            // 只读诊断视图（订阅数 / 端口 / token / leader 状态 / 链路 trace），供自查与排障
             if (window.__autoAllState) {
                 window.__autoAllState.netDiag = {
                     subs: ctx.subs,
                     get port() { return ctx.port; },
                     get tokenState() { return ctx.token ? 'set' : 'none'; },
-                    handledCount: () => ctx.handled.size
+                    handledCount: () => ctx.handled.size,
+                    get isLeader() { return ctx.isLeader; },
+                    get engineOn() { return ctx.engineOn; },
+                    myId: () => ctx.myId,
+                    leaderInfo: () => {
+                        const L = ctx.leaderMap.get(ctx.port);
+                        return L ? { id: L.id.slice(0, 8), ageMs: Date.now() - L.ts } : null;
+                    },
+                    trace: () => ctx.trace.slice()
                 };
             }
-            enumerate();
-            enumLoop();
+            startElection(); // 选举结果驱动 engineStart，不再无条件订阅
             log('[Net] Multi-conversation network auto-accept started');
         }
 
         function stop() {
             ctx.running = false;
-            for (const [, rec] of ctx.subs) { try { rec.ac.abort(); } catch (e) { } }
-            ctx.subs.clear();
-            ctx.handled.clear();
+            coordPost('yield');
+            try { if (ctx.channel) ctx.channel.close(); } catch (e) { }
+            ctx.channel = null;
+            engineStop();
             log('[Net] Multi-conversation network auto-accept stopped');
         }
 
@@ -1158,6 +1339,18 @@
         window.__autoAllState.isRunning = false;
         try { if (networkAutoAccept) networkAutoAccept.stop(); } catch (e) { }
         log("Agent Stopped.");
+    };
+
+    // 本实例拆除函数：停掉网络层（选举广播 + 全部状态流订阅），并让在跑的 DOM 循环退出。
+    // 由下一次重复注入本 IIFE 时在顶部调用，保证同一上下文永远只有一个活动实例。
+    window.__autoAllTeardown = function () {
+        try {
+            if (window.__autoAllState) {
+                window.__autoAllState.isRunning = false;
+                window.__autoAllState.sessionID = (window.__autoAllState.sessionID || 0) + 1;
+            }
+        } catch (e) { }
+        try { if (networkAutoAccept) networkAutoAccept.stop(); } catch (e) { }
     };
 
     log("Core Bundle Initialized.", true);
