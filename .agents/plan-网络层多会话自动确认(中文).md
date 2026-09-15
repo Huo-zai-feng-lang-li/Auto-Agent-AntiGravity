@@ -61,3 +61,27 @@
 - 另修：主框架导航 Page.frameNavigated 后重置注入标记以便重注入；删除循环内未使用变量。
 - 不采纳 S6（buf.slice 帧拷贝）：半包/粘包拼帧必需、频率极低，改动收益不足。
 - 回归验证：冷启动零交互自动订阅全部会话、页面 0 异常 0 错误日志；Enter 发送后 1.2s 切后台，t+4s 后台 WAITING 被网络层确认（handled+1）、文件真实删除、计数长期稳定。
+
+## 8. 性能去重 / 重复注入修复 / Manager 弹窗排查（2026-09-15，进行中）
+背景：用户反馈 ① Agent Manager（独立窗口，页面 URL 前缀 `workbench-jetski-agent.html`，与 IDE 的 `workbench.html` 同源 `vscode-file://vscode-app`）里「Ask every time / Reject / Run」确认条没被自动点；② 模型响应变慢。
+
+### 8.1 已证实并修复：重复订阅（性能根因之一）
+- 每个被注入页面都各跑一套网络层。Agent Manager 与「同工作区 IDE 窗口」连**同一个 language server 端口**，于是同一 LS 的全部会话被订阅两遍（实测 12315 上 10 会话×2=20 条，全局 40 条）。模型高频流式输出时，重复的 `applyIndexed`(复制 steps 数组，大会话数百步) + `scanWaiting`(遍历) 线性放大主线程负担。
+- 修复（full_cdp_script.js）：同源 `BroadcastChannel('autoall-coord-v1')` Bully 选举，**同一 LS 端口仅 id 最小且心跳活跃的页面为 leader 建订阅**，follower 零连接；leader 心跳 2s、租约 6s，崩溃/关窗自动接管；不同 LS 端口互不影响；BroadcastChannel 不可用时降级为各自订阅（旧行为，安全）。DOM 前台兜底每个窗口照跑，与 leader 网络层互为幂等双保险。
+- 实测：稳态每个 LS 端口 leaders=1、totalSubs=会话数，全局去重正确。
+
+### 8.2 已证实并修复：重复注入导致多实例「幽灵 leader」
+- IIFE 原本无重入守卫。CDP 断线重连 / frameNavigated 重复注入会在**同一 JS 上下文**叠加 IIFE，旧闭包里的选举广播/状态流订阅/DOM 循环不退出：旧实例持续发 beat 压制新实例（新实例误判有更小 leader 而永不订阅），旧版本还会因此重复订阅。
+- 修复：IIFE 顶部 `if(window.__autoAllTeardown) window.__autoAllTeardown()`；末尾注册 `__autoAllTeardown`（停网络层 + sessionID 递增使旧 DOM 循环退出 + 广播 yield）。实测对同一页面重复注入完整 IIFE 后，旧实例被拆除、新实例稳定成为唯一 leader（subs 正常、无幽灵、13s 不叠加）。
+
+### 8.3 加固：runCommand 字段回退链对齐前端
+- 前端确认组件 LSi 读 `step.commandLine`（空则 `command+args`）；buildInteraction 的 runCommand 改为 `runCommand||requestedInteraction.runCommand`，命令取 `proposedCommandLine||commandLine||submittedCommandLine||command+args`，空命令返回 null 等下帧、绝不盲目确认。
+
+### 8.4 诊断仪表 netTrace（为 8.5 抓现场）
+- ctx 环形缓冲（240 条）暴露到 `netDiag.trace()`：`step`(非 DONE 状态跳变，含 RUNNING→WAITING)、`wait`(到达 scanWaiting 的 WAITING 形态:req/top/hasRC)、`build`(构造结果 null/skip/banned/字段名)、`rpc`(HTTP 状态)、`leader`(选举升降)。另 netDiag 新增 isLeader/engineOn/myId/leaderInfo。
+
+### 8.5 未闭环：Manager 的 Run 确认条（根因待定，需现场 trace）
+- 已用 IDE bundle 取证：前端仅在 `step.status===WAITING` 渲染 Run/Reject（jetskiAgent/main.js 与 workbench.desktop.main.js 一致），点 Run 走 sendUserInteraction=HandleCascadeUserInteraction；前端 `p7` 也是按 indices 整体替换、后端推完整 step（排除「稀疏 patch 覆盖丢字段」假设）。
+- 但首次排查时全页面订阅里 WAITING=0（时序错位，没抓到现场）。**下一步：用户复现该弹窗（先别点 Run），立即跑 agent workspace 的 `dump_trace.js`，据 trace 判断断点：step 事件有无 WAITING（流是否到达）→ wait（scanWaiting 是否看到）→ build（构造是否 null）→ rpc（确认是否 200）。**
+- commit c59c7bc（本地，未 push；待 8.5 闭环后与问题1修复一起 bump 1.0.81 打包发布）。部署目录现为 `...auto-agent-antigravity-1.0.80\main_scripts\`（用户已用 1.0.80 vsix 正式安装）。
+
