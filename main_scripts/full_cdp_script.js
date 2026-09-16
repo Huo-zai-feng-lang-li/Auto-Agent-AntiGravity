@@ -571,6 +571,7 @@
             isLeader: false,          // 当前端口本页面是否为 leader（只有 leader 建订阅）
             engineOn: false,          // 订阅引擎是否在跑（enumerate + 各会话长连接）
             electionTimer: null, beatAt: 0, voteAt: 0, channel: null,
+            lastPerfScan: 0,        // discoverPortFromPerf 冷却时间戳，避免每 1s 全量遍历 performance 资源
             trace: []                 // 诊断环形缓冲：记录状态帧/WAITING/确认链路，供排障抓现场
         };
 
@@ -639,7 +640,15 @@
             };
         }
 
+        // 从 performance 资源记录中发现 language server 动态端口。
+        // 冷却优化：electionTick 每 1s 调用本函数，但 performance.getEntriesByType('resource')
+        // 在 IDE 页面可能有数千条资源，全量遍历+正则匹配有几毫秒开销。已有端口时 10s 冷却，
+        // 减少 90% 遍历；LS 重启换端口最坏 10s 发现（可接受）。端口为空时不受冷却限制。
+        const PERF_SCAN_COOLDOWN = 10000;
         function discoverPortFromPerf() {
+            const now = Date.now();
+            if (ctx.port && now - ctx.lastPerfScan < PERF_SCAN_COOLDOWN) return;
+            ctx.lastPerfScan = now;
             try {
                 const ports = [...new Set(
                     performance.getEntriesByType('resource')
