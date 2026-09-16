@@ -2,7 +2,7 @@ node_modules
 dist
 out
 *.vsix
-.agent
+
 *.code-workspace
 .DS_Store
 .vscode-test
