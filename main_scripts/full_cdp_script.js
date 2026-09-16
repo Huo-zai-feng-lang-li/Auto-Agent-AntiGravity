@@ -723,8 +723,14 @@
             if (step.sendCommandInput) return 'sendCommandInput';
             if (step.mcpTool) return 'mcp';
             if (step.runExtensionCode) return 'runExtensionCode';
-            const fp = step.codeAction && step.codeAction.filePermissionRequest;
-            return fp ? 'filePermission' : null;
+            // 通用：任何顶层字段内嵌 filePermissionRequest（如 codeAction / listDirectory /
+            // readFile / editFile 等）都视为文件/目录权限确认，避免新增步骤类型时漏支持。
+            // 步骤对象通常仅 4-5 个字段，遍历开销可忽略；且 inferKind 仅在 WAITING 时调用（低频）。
+            for (const k of Object.keys(step)) {
+                const v = step[k];
+                if (v && typeof v === 'object' && v.filePermissionRequest) return 'filePermission';
+            }
+            return null;
         }
 
         // 构造 CascadeUserInteraction 的平铺 oneof 字段；返回 null 表示无法自动处理
@@ -752,8 +758,17 @@
                 };
             }
             if (kind === 'filePermission') {
-                const spec = (step.requestedInteraction && step.requestedInteraction.filePermission)
-                    || (step.codeAction && step.codeAction.filePermissionRequest) || {};
+                // requestedInteraction.filePermission 优先（显式请求），否则遍历顶层字段找
+                // 内嵌的 filePermissionRequest（codeAction / listDirectory / readFile 等），
+                // 与 inferKind 的通用识别逻辑对齐，避免新增类型时漏支持。
+                let spec = (step.requestedInteraction && step.requestedInteraction.filePermission) || null;
+                if (!spec) {
+                    for (const k of Object.keys(step)) {
+                        const v = step[k];
+                        if (v && typeof v === 'object' && v.filePermissionRequest) { spec = v.filePermissionRequest; break; }
+                    }
+                }
+                spec = spec || {};
                 if (!spec.absolutePathUri) return null;
                 return {
                     field: 'filePermission',
