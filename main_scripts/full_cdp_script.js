@@ -674,17 +674,17 @@
         }
 
         // ---- 状态增量合并（对齐 IDE 内部按 indices 覆盖语义）----
+        // 原地合并 steps 增量更新：直接修改 prev 数组，避免每帧 O(N) 分配+全量拷贝。
+        // rec.local.trajectory.steps 是唯一引用，原地修改安全；大会话(数百步)下显著降低 GC 压力。
         function applyIndexed(prev, indices, items, total) {
-            const n = total != null ? total : Math.max(prev.length, indices ? indices.length : 0);
-            const next = new Array(n);
-            for (let i = 0; i < prev.length && i < n; i++) next[i] = prev[i];
+            if (total != null && prev.length < total) prev.length = total;
             if (indices && items) {
                 for (let k = 0; k < indices.length; k++) {
                     const idx = indices[k];
-                    if (idx >= 0 && idx < n) next[idx] = items[k];
+                    if (idx >= 0) prev[idx] = items[k];
                 }
             }
-            return next;
+            return prev;
         }
 
         function mergeUpdate(prev, u) {
@@ -758,14 +758,32 @@
             return null;
         }
 
-        async function scanWaiting(cid, local) {
+        // 增量扫描 WAITING：只检查「本次更新的步骤 indices」+「之前信息暂缺待重试的步骤」，
+        // 避免每帧 O(N) 全量遍历。WAITING 只能在被更新的步骤里产生；未更新的步骤状态不变。
+        // pendingRetry 记录 buildInteraction 返回 null(信息暂缺)的步骤，下次该步骤更新或任何帧到达时重试。
+        async function scanWaiting(cid, local, update, rec) {
             const steps = local && local.trajectory && local.trajectory.steps;
             if (!Array.isArray(steps)) return;
-            for (let i = 0; i < steps.length; i++) {
+            if (!rec.pendingRetry) rec.pendingRetry = new Set();
+
+            // 收集本次需要检查的索引：待重试 ∪ 本次更新的 indices
+            const checkSet = new Set(rec.pendingRetry);
+            const su = update && update.mainTrajectoryUpdate && update.mainTrajectoryUpdate.stepsUpdate;
+            if (su && Array.isArray(su.indices)) {
+                for (let k = 0; k < su.indices.length; k++) checkSet.add(su.indices[k]);
+            }
+
+            for (const i of checkSet) {
                 const step = steps[i];
-                if (!step || step.status !== WAITING) continue;
+                if (!step || step.status !== WAITING) {
+                    rec.pendingRetry.delete(i); // 不再是 WAITING，移出待重试
+                    continue;
+                }
                 const key = cid + '#' + i;
-                if (ctx.handled.has(key)) continue;
+                if (ctx.handled.has(key)) {
+                    rec.pendingRetry.delete(i);
+                    continue;
+                }
 
                 // 诊断：记录到达此处的 WAITING 步骤形态，定位“没点到”卡在哪一环
                 pushTrace({
@@ -775,18 +793,21 @@
                 });
                 const built = buildInteraction(step);
                 if (!built) {
-                    // 信息暂时不足：不标记，后续帧补齐后可重试；留痕便于发现“永远补不齐”的类型
+                    // 信息暂时不足：加入待重试，后续该步骤更新时再试；留痕便于发现“永远补不齐”的类型
+                    rec.pendingRetry.add(i);
                     pushTrace({ t: 'build', cid: cid.slice(0, 8), idx: i, r: 'null' });
                     continue;
                 }
                 if (built.banned || built.skip) {
                     // 命中黑名单 / 明确不自动（如 elicitation）：标记一次，避免每帧重复评估
                     ctx.handled.add(key);
+                    rec.pendingRetry.delete(i);
                     pushTrace({ t: 'build', cid: cid.slice(0, 8), idx: i, r: built.banned ? 'banned' : 'skip' });
                     if (built.banned) log(`[Net] Banned command skipped @ conv ${cid.slice(0, 8)} step ${i}`);
                     continue;
                 }
                 ctx.handled.add(key);
+                rec.pendingRetry.delete(i);
                 try {
                     const trajId = local.trajectoryId;
                     const interaction = Object.assign(
@@ -800,10 +821,12 @@
                         log(`[Net] Auto-confirmed ${built.field} @ conv ${cid.slice(0, 8)} step ${i}`);
                     } else {
                         ctx.handled.delete(key); // 失败允许后续重试
+                        rec.pendingRetry.add(i);  // 失败也加入待重试
                         log(`[Net] Handle failed status=${r.status} body=${(r.text || '').slice(0, 160)}`);
                     }
                 } catch (e) {
                     ctx.handled.delete(key);
+                    rec.pendingRetry.add(i); // 异常也加入待重试
                     pushTrace({ t: 'rpc', cid: cid.slice(0, 8), idx: i, err: (e && e.message || '').slice(0, 80) });
                     log(`[Net] Handle error: ${e && e.message}`);
                 }
@@ -852,7 +875,7 @@
                                 if (msg.update) {
                                     rec.local = mergeUpdate(rec.local || { conversationId: cid }, msg.update);
                                     traceStepChanges(cid, rec, msg.update);
-                                    await scanWaiting(cid, rec.local);
+                                    await scanWaiting(cid, rec.local, msg.update, rec);
                                 }
                             }
                         }
