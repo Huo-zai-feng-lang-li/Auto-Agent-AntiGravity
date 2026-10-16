@@ -32,12 +32,15 @@ class TaskNotifier {
 
         const mediaDir = path.join(__dirname, '..', 'media');
         
-        // 动态扫描 media 目录下所有编号格式的 card_*.png 图片，实现全量随机轮播
+        // 动态扫描 media 目录下所有编号格式的 card_*.{jpg,png} 图片，实现全量随机轮播
+        // （优先 jpg：压缩后 4MB；兼容旧 png）
         let availableCardFiles = [];
         try {
             if (fs.existsSync(mediaDir)) {
-                availableCardFiles = fs.readdirSync(mediaDir)
-                    .filter(f => /^card_\d+\.png$/i.test(f));
+                const all = fs.readdirSync(mediaDir).filter(f => /^card_\d+\.(jpg|png)$/i.test(f));
+                // 若同名同时存在 jpg 与 png，只保留 jpg
+                const jpgSet = new Set(all.filter(f => /\.jpg$/i.test(f)).map(f => f.replace(/\.jpg$/i, '')));
+                availableCardFiles = all.filter(f => /\.jpg$/i.test(f) || !jpgSet.has(f.replace(/\.png$/i, '')));
             }
         } catch (e) { }
 

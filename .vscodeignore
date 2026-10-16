@@ -11,6 +11,7 @@ CONTRIBUTING.md.original
 builds/**
 *.vsix
 media/dashboard-overview.png
+media_png_backup/**
 ps1-scripts/**
 scripts/**
 docs/**
